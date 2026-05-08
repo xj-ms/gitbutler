@@ -516,7 +516,7 @@ pub struct IgnoredWorktreeChange {
 but_schemars::register_sdk_type!(IgnoredWorktreeChange);
 
 /// The type returned by [`worktree_changes()`](diff::worktree_changes).
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct WorktreeChanges {
     /// Changes that could be committed.
     pub changes: Vec<TreeChange>,

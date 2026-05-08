@@ -148,6 +148,7 @@ impl TryFrom<HunkAssignment> for but_db::HunkAssignment {
             path_bytes: value.path_bytes.into(),
             stack_id: None,
             branch_ref_bytes: value.branch_ref_bytes.map(|r| r.into_inner().into()),
+            previous_path_bytes: None,
         })
     }
 }
@@ -416,6 +417,11 @@ impl HunkAssignment {
 /// Applies assignment requests by reconciling them with the current worktree and persisted assignments.
 /// Persists the updated assignments and returns `Ok(())` on success.
 ///
+/// This uses a **scoped fast-path**: only the files referenced by `requests` are
+/// re-diffed and reconciled. Assignments for all other files are kept as-is from
+/// the persisted state. This is safe because hunk intersections are always
+/// scoped to a single file path, so cross-file interactions are impossible.
+///
 /// `context_lines` determines the amount of context lines in diffs, and it should match the UI.
 pub fn assign(
     db: HunkAssignmentsHandleMut,
@@ -426,21 +432,84 @@ pub fn assign(
 ) -> Result<()> {
     let _span = tracing::info_span!("hunk_assignment::assign").entered();
 
+    if requests.is_empty() {
+        return Ok(());
+    }
+
     let branches_by_stack = {
         let _span = tracing::debug_span!("workspace_branches_by_stack").entered();
         workspace_branches_by_stack(workspace)
     };
 
-    let worktree_changes: Vec<but_core::TreeChange> = {
-        let _span = tracing::info_span!("worktree_changes").entered();
-        but_core::diff::worktree_changes(repo)?.changes
+    // Collect the set of affected file paths from the requests.
+    let affected_paths: std::collections::HashSet<&BString> = {
+        let _span = tracing::debug_span!("collect_affected_paths").entered();
+        requests.iter().map(|r| &r.path_bytes).collect()
     };
-    let worktree_assignments = {
-        let _span =
-            tracing::info_span!("build_worktree_assignments", num_changes = worktree_changes.len())
-                .entered();
+    tracing::info!(num_affected_paths = affected_paths.len(), "scoped assign");
+
+    // Load persisted assignments and partition by affected/unaffected.
+    let (mut persisted_assignments, mut previous_paths) =
+        state::assignments_with_previous_paths(db.to_ref())?;
+    backfill_branch_ref_from_legacy_stack_id(&mut persisted_assignments, workspace);
+
+    let (persisted_affected, persisted_unaffected): (Vec<_>, Vec<_>) = persisted_assignments
+        .into_iter()
+        .partition(|a| affected_paths.contains(&a.path_bytes));
+
+    // Diff only the affected files (including any persisted rename source paths so
+    // `gix` can pair renames without walking the entire worktree).
+    let affected_worktree_changes: Vec<but_core::TreeChange> = {
+        let _span = tracing::info_span!("worktree_changes_scoped").entered();
+        let mut path_list: Vec<BString> = affected_paths.iter().copied().cloned().collect();
+        for path in &affected_paths {
+            if let Some(prev_path) = previous_paths.get(*path)
+                && !affected_paths.contains(prev_path)
+            {
+                path_list.push(prev_path.clone());
+            }
+        }
+        let mut changes = but_core::diff::worktree_changes_for_paths(repo, &path_list)?.changes;
+        changes.retain(|c| affected_paths.contains(&c.path));
+
+        // If the DB had no prior rename mapping (e.g. cold DB before `assignments_with_fallback`)
+        // and a scoped change appears as an Addition while the request has non-addition hunk
+        // coordinates (`old_start > 0 || old_lines > 0`), fall back to full worktree diff so
+        // rename tracking can pair the source file.
+        let needs_unscoped_rename_fallback = changes.iter().any(|c| {
+            !previous_paths.contains_key(&c.path)
+                && matches!(c.status, but_core::TreeStatus::Addition { .. })
+                && requests.iter().any(|r| {
+                    r.path_bytes == c.path
+                        && r.hunk_header
+                            .is_some_and(|h| h.old_start > 0 || h.old_lines > 0)
+                })
+        });
+        if needs_unscoped_rename_fallback {
+            changes = but_core::diff::worktree_changes(repo)?.changes;
+            changes.retain(|c| affected_paths.contains(&c.path));
+        }
+
+        changes
+    };
+
+    for path in &affected_paths {
+        previous_paths.remove(*path);
+    }
+    for change in &affected_worktree_changes {
+        if let Some(prev) = change.previous_path() {
+            previous_paths.insert(change.path.clone(), prev.into());
+        }
+    }
+
+    let affected_worktree_assignments = {
+        let _span = tracing::info_span!(
+            "build_worktree_assignments",
+            num_changes = affected_worktree_changes.len()
+        )
+        .entered();
         let mut assignments = vec![];
-        for change in &worktree_changes {
+        for change in &affected_worktree_changes {
             let diff = change.unified_patch(repo, context_lines);
             assignments.extend(HunkAssignment::from_tree_change(
                 change,
@@ -450,36 +519,34 @@ pub fn assign(
         assignments
     };
 
-    // Reconcile worktree with the persisted assignments
-    let with_worktree = {
-        let mut persisted_assignments = state::assignments(db.to_ref())?;
-        backfill_branch_ref_from_legacy_stack_id(&mut persisted_assignments, workspace);
+    // Reconcile only the affected subset with persisted state.
+    let reconciled_affected = {
         let _span = tracing::info_span!(
             "reconcile_worktree_with_persisted",
-            num_worktree = worktree_assignments.len(),
-            num_persisted = persisted_assignments.len(),
+            num_worktree = affected_worktree_assignments.len(),
+            num_persisted = persisted_affected.len(),
         )
         .entered();
         reconcile::assignments(
-            &worktree_assignments,
-            &persisted_assignments,
+            &affected_worktree_assignments,
+            &persisted_affected,
             &branches_by_stack,
             MultipleOverlapping::SetMostLines,
             true,
         )
     };
 
-    // Reconcile with the requested changes
-    let mut with_requests = {
+    // Apply the user's assignment requests on top.
+    let reconciled_with_requests = {
         let request_assignments = requests_to_assignments(requests, workspace)?;
         let _span = tracing::info_span!(
             "reconcile_with_requests",
-            num_current = with_worktree.len(),
+            num_current = reconciled_affected.len(),
             num_requests = request_assignments.len(),
         )
         .entered();
         reconcile::assignments(
-            &with_worktree,
+            &reconciled_affected,
             &request_assignments,
             &branches_by_stack,
             MultipleOverlapping::SetMostLines,
@@ -487,15 +554,18 @@ pub fn assign(
         )
     };
 
+    // Merge unaffected (kept as-is) with reconciled affected assignments.
+    let mut all_assignments = persisted_unaffected;
+    all_assignments.extend(reconciled_with_requests);
+
     {
         let _span = tracing::debug_span!("derive_stack_ids").entered();
-        derive_stack_ids(&mut with_requests, workspace);
+        derive_stack_ids(&mut all_assignments, workspace);
     }
     {
-        let _span =
-            tracing::info_span!("set_assignments", num_assignments = with_requests.len())
-                .entered();
-        state::set_assignments(db, with_requests)?;
+        let _span = tracing::info_span!("set_assignments", num_assignments = all_assignments.len())
+            .entered();
+        state::set_assignments(db, all_assignments, &previous_paths)?;
     }
 
     Ok(())
@@ -554,10 +624,14 @@ fn reconcile_worktree_changes_with_worktree(
             diff.ok().flatten(),
         ));
     }
+    let previous_paths: HashMap<BString, BString> = worktree_changes
+        .iter()
+        .filter_map(|c| c.previous_path().map(|prev| (c.path.clone(), prev.into())))
+        .collect();
     let mut reconciled = reconcile_with_worktree(db.to_ref(), workspace, &worktree_assignments)?;
 
     derive_stack_ids(&mut reconciled, workspace);
-    state::set_assignments(db, reconciled.clone())?;
+    state::set_assignments(db, reconciled.clone(), &previous_paths)?;
     Ok(reconciled)
 }
 
@@ -1501,5 +1575,240 @@ mod tests {
             result[0].branch_ref_bytes, None,
             "branch_ref_bytes should be cleared when branch is no longer in workspace"
         );
+    }
+
+    #[test]
+    fn test_assign_empty_requests_is_noop() -> Result<()> {
+        use but_testsupport::CommandExt;
+
+        let tmp = but_testsupport::gix_testtools::tempfile::TempDir::new()?;
+        let repo = but_testsupport::open_repo(gix::init(tmp.path())?.workdir().unwrap())?;
+        std::fs::write(tmp.path().join("file.txt"), "line1\nline2\n")?;
+        but_testsupport::git(&repo).args(["add", "."]).run();
+        but_testsupport::git(&repo)
+            .args(["commit", "-m", "init"])
+            .run();
+        std::fs::write(tmp.path().join("file.txt"), "line1-mod\nline2\n")?;
+
+        let ws = workspace_with_stacks(vec![stack(Some(1), &["refs/heads/feature-a"], 0)]);
+        let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+
+        let (initial, _) = assignments_with_fallback(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            None::<Vec<TreeChange>>,
+            3,
+        )?;
+        assert_eq!(initial.len(), 1);
+
+        assign(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            vec![HunkAssignmentRequest {
+                hunk_header: initial[0].hunk_header,
+                path_bytes: BString::from("file.txt"),
+                target: Some(HunkAssignmentTarget::Stack {
+                    stack_id: stack_id_seq(1),
+                }),
+            }],
+            3,
+        )?;
+
+        // Empty requests should be a no-op and must not duplicate rows or fail with UNIQUE constraint error.
+        assign(db.hunk_assignments_mut()?, &repo, &ws, vec![], 3)?;
+
+        let persisted = state::assignments(db.hunk_assignments())?;
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0]
+                .branch_ref_bytes
+                .as_ref()
+                .map(|r| r.to_string()),
+            Some("refs/heads/feature-a".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_assign_renamed_file_preserves_hunks_and_previous_path() -> Result<()> {
+        use but_testsupport::CommandExt;
+
+        let tmp = but_testsupport::gix_testtools::tempfile::TempDir::new()?;
+        let repo = but_testsupport::open_repo(gix::init(tmp.path())?.workdir().unwrap())?;
+        let original_lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(tmp.path().join("old.rs"), &original_lines)?;
+        std::fs::write(tmp.path().join("other.rs"), "other 1\nother 2\n")?;
+        but_testsupport::git(&repo).args(["add", "."]).run();
+        but_testsupport::git(&repo)
+            .args(["commit", "-m", "init"])
+            .run();
+
+        // Rename old.rs -> new.rs and modify both ends so there are two separate hunks.
+        std::fs::remove_file(tmp.path().join("old.rs"))?;
+        let mut modified_lines: Vec<String> = (1..=20).map(|i| format!("line {i}\n")).collect();
+        modified_lines[0] = "line 1 modified\n".to_string();
+        modified_lines[19] = "line 20 modified\n".to_string();
+        std::fs::write(tmp.path().join("new.rs"), modified_lines.concat())?;
+        std::fs::write(tmp.path().join("other.rs"), "other 1 modified\nother 2\n")?;
+
+        let ws = workspace_with_stacks(vec![
+            stack(Some(1), &["refs/heads/feature-a"], 0),
+            stack(Some(2), &["refs/heads/feature-b"], 1),
+        ]);
+        let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+
+        // Populate initial assignments via assignments_with_fallback (normal app flow).
+        let (initial, _) = assignments_with_fallback(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            None::<Vec<TreeChange>>,
+            3,
+        )?;
+        let new_rs_hunks: Vec<_> = initial
+            .iter()
+            .filter(|a| a.path_bytes == "new.rs")
+            .cloned()
+            .collect();
+        assert_eq!(
+            new_rs_hunks.len(),
+            2,
+            "renamed file with edits at top and bottom should have 2 hunks"
+        );
+
+        // Assign the first hunk of new.rs to stack 1.
+        assign(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            vec![HunkAssignmentRequest {
+                hunk_header: new_rs_hunks[0].hunk_header,
+                path_bytes: BString::from("new.rs"),
+                target: Some(HunkAssignmentTarget::Stack {
+                    stack_id: stack_id_seq(1),
+                }),
+            }],
+            3,
+        )?;
+
+        // Assign the second hunk of new.rs to stack 2 (verifies previous_path_bytes survived the first assign).
+        assign(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            vec![HunkAssignmentRequest {
+                hunk_header: new_rs_hunks[1].hunk_header,
+                path_bytes: BString::from("new.rs"),
+                target: Some(HunkAssignmentTarget::Stack {
+                    stack_id: stack_id_seq(2),
+                }),
+            }],
+            3,
+        )?;
+
+        let (persisted, prev_paths) =
+            state::assignments_with_previous_paths(db.hunk_assignments())?;
+        assert_eq!(
+            prev_paths.get(&BString::from("new.rs")),
+            Some(&BString::from("old.rs")),
+            "previous_path_bytes should remain persisted across scoped assign calls"
+        );
+
+        let persisted_new_rs: Vec<_> = persisted
+            .iter()
+            .filter(|a| a.path_bytes == "new.rs")
+            .collect();
+        assert_eq!(
+            persisted_new_rs.len(),
+            2,
+            "scoped assign on a renamed file must preserve individual hunks instead of collapsing into a whole-file Addition"
+        );
+        assert_eq!(
+            persisted_new_rs[0]
+                .branch_ref_bytes
+                .as_ref()
+                .map(|r| r.to_string()),
+            Some("refs/heads/feature-a".to_string())
+        );
+        assert_eq!(
+            persisted_new_rs[1]
+                .branch_ref_bytes
+                .as_ref()
+                .map(|r| r.to_string()),
+            Some("refs/heads/feature-b".to_string())
+        );
+
+        // Also test cold-DB fallback: calling assign() on a fresh DB without prior assignments_with_fallback.
+        let mut cold_db = but_db::DbHandle::new_at_path(":memory:")?;
+        assign(
+            cold_db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            vec![HunkAssignmentRequest {
+                hunk_header: new_rs_hunks[0].hunk_header,
+                path_bytes: BString::from("new.rs"),
+                target: Some(HunkAssignmentTarget::Stack {
+                    stack_id: stack_id_seq(1),
+                }),
+            }],
+            3,
+        )?;
+        let (cold_persisted, cold_prev_paths) =
+            state::assignments_with_previous_paths(cold_db.hunk_assignments())?;
+        assert_eq!(
+            cold_prev_paths.get(&BString::from("new.rs")),
+            Some(&BString::from("old.rs"))
+        );
+        assert_eq!(cold_persisted.len(), 2);
+        assert_eq!(
+            cold_persisted[0]
+                .branch_ref_bytes
+                .as_ref()
+                .map(|r| r.to_string()),
+            Some("refs/heads/feature-a".to_string())
+        );
+        assert_eq!(cold_persisted[1].branch_ref_bytes, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_assign_path_with_glob_brackets() -> Result<()> {
+        let tmp = but_testsupport::gix_testtools::tempfile::TempDir::new()?;
+        let repo = but_testsupport::open_repo(gix::init(tmp.path())?.workdir().unwrap())?;
+        let dir = tmp.path().join("routes").join("[slug]");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("page.ts"), "export const load = () => {};\n")?;
+
+        let ws = workspace_with_stacks(vec![stack(Some(1), &["refs/heads/feature-a"], 0)]);
+        let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+
+        assign(
+            db.hunk_assignments_mut()?,
+            &repo,
+            &ws,
+            vec![HunkAssignmentRequest {
+                hunk_header: None,
+                path_bytes: BString::from("routes/[slug]/page.ts"),
+                target: Some(HunkAssignmentTarget::Stack {
+                    stack_id: stack_id_seq(1),
+                }),
+            }],
+            3,
+        )?;
+
+        let persisted = state::assignments(db.hunk_assignments())?;
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].path_bytes, "routes/[slug]/page.ts");
+        assert_eq!(
+            persisted[0]
+                .branch_ref_bytes
+                .as_ref()
+                .map(|r| r.to_string()),
+            Some("refs/heads/feature-a".to_string())
+        );
+        Ok(())
     }
 }

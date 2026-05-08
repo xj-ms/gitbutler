@@ -35,13 +35,28 @@ enum Origin {
 /// to get a commit with a tree equal to the current worktree.
 #[instrument(skip(repo), err(Debug))]
 pub fn worktree_changes(repo: &gix::Repository) -> anyhow::Result<WorktreeChanges> {
-    worktree_changes_inner(repo, RenameTracking::Always)
+    worktree_changes_inner(repo, RenameTracking::Always, None)
 }
 
 /// Just like [`worktree_changes()`], but don't do any rename tracking for performance.
 #[instrument(skip(repo), err(Debug))]
 pub fn worktree_changes_no_renames(repo: &gix::Repository) -> anyhow::Result<WorktreeChanges> {
-    worktree_changes_inner(repo, RenameTracking::Disabled)
+    worktree_changes_inner(repo, RenameTracking::Disabled, None)
+}
+
+/// Just like [`worktree_changes()`], but scoped to only the given file `paths`.
+///
+/// This is significantly faster when only a few files need to be checked, as
+/// `gix` will use pathspec matching to avoid diffing the entire worktree.
+#[instrument(skip(repo, paths), fields(num_paths = paths.len()), err(Debug))]
+pub fn worktree_changes_for_paths(
+    repo: &gix::Repository,
+    paths: &[BString],
+) -> anyhow::Result<WorktreeChanges> {
+    if paths.is_empty() {
+        return Ok(WorktreeChanges::default());
+    }
+    worktree_changes_inner(repo, RenameTracking::Always, Some(paths))
 }
 
 enum RenameTracking {
@@ -52,6 +67,7 @@ enum RenameTracking {
 fn worktree_changes_inner(
     repo: &gix::Repository,
     renames: RenameTracking,
+    pathspecs: Option<&[BString]>,
 ) -> anyhow::Result<WorktreeChanges> {
     let (tree_index_rewrites, worktree_rewrites) = match renames {
         RenameTracking::Always => {
@@ -94,7 +110,11 @@ fn worktree_changes_inner(
                     .set_emit_collapsed(None);
             }
         })
-        .into_iter(None)?;
+        .into_iter(pathspecs.into_iter().flatten().map(|p| {
+            let mut spec = BString::from(":(literal)");
+            spec.extend_from_slice(p.as_bstr());
+            spec
+        }))?;
 
     let work_dir = repo.workdir().context("need non-bare repository")?;
     let mut tree_index_changes = Vec::new();

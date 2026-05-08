@@ -33,6 +33,7 @@ schemars = { workspace = true, optional = true }
 but-schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
+but-testsupport.workspace = true
 uuid.workspace = true
 
 [lints]
