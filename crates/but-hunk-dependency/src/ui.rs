@@ -54,6 +54,11 @@ impl HunkDependencies {
     ) -> anyhow::Result<HunkDependencies> {
         let mut diffs = Vec::<(String, DiffHunk, Vec<HunkLock>)>::new();
         for change in worktree_changes {
+            // Skip computing the worktree unified patch when no workspace commits
+            // modified this path, since `ranges.intersection` cannot match anything.
+            if !ranges.has_path(&change.path) {
+                continue;
+            }
             let unidiff = change.unified_patch(repo, 0 /* zero context lines */)?;
             let Some(UnifiedPatch::Patch { hunks, .. }) = unidiff else {
                 continue;
