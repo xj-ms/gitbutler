@@ -148,22 +148,51 @@ pub fn new_stacks_to_input_stacks(
     repo: &gix::Repository,
     workspace: &but_graph::Workspace,
 ) -> anyhow::Result<Vec<InputStack>> {
+    tracing::info!(
+        num_stacks = workspace.stacks.len(),
+        total_commits = workspace
+            .stacks
+            .iter()
+            .map(|s| s
+                .segments
+                .iter()
+                .map(|seg| seg.commits.len())
+                .sum::<usize>())
+            .sum::<usize>(),
+        "processing stacks"
+    );
+
     workspace
         .stacks
         .iter()
-        .map(|stack| {
+        .enumerate()
+        .map(|(stack_idx, stack)| {
+            let _span = tracing::info_span!(
+                "process_stack",
+                stack_idx,
+                stack_id = ?stack.id,
+                num_segments = stack.segments.len(),
+            )
+            .entered();
+
             let commits = stack
                 .segments
                 .iter()
                 .flat_map(|s| &s.commits)
                 .map(|commit| {
                     let commit = repo.find_commit(commit.id)?;
-                    let tree_changes = but_core::diff::tree_changes(
-                        repo,
-                        commit.parent_ids().next().map(|id| id.detach()),
-                        commit.id,
-                    )?;
-                    let files = tree_changes_to_input_files(repo, tree_changes)?;
+                    let tree_changes = {
+                        let _span = tracing::debug_span!("tree_changes", commit_id = %commit.id).entered();
+                        but_core::diff::tree_changes(
+                            repo,
+                            commit.parent_ids().next().map(|id| id.detach()),
+                            commit.id,
+                        )?
+                    };
+                    let files = {
+                        let _span = tracing::debug_span!("tree_changes_to_input_files", num_changes = tree_changes.len()).entered();
+                        tree_changes_to_input_files(repo, tree_changes)?
+                    };
 
                     Ok(InputCommit {
                         commit_id: commit.id,

@@ -424,42 +424,79 @@ pub fn assign(
     requests: Vec<HunkAssignmentRequest>,
     context_lines: u32,
 ) -> Result<()> {
-    let branches_by_stack = workspace_branches_by_stack(workspace);
+    let _span = tracing::info_span!("hunk_assignment::assign").entered();
 
-    let worktree_changes: Vec<but_core::TreeChange> =
-        but_core::diff::worktree_changes(repo)?.changes;
-    let mut worktree_assignments = vec![];
-    for change in &worktree_changes {
-        let diff = change.unified_patch(repo, context_lines);
-        worktree_assignments.extend(HunkAssignment::from_tree_change(
-            change,
-            diff.ok().flatten(),
-        ));
-    }
+    let branches_by_stack = {
+        let _span = tracing::debug_span!("workspace_branches_by_stack").entered();
+        workspace_branches_by_stack(workspace)
+    };
+
+    let worktree_changes: Vec<but_core::TreeChange> = {
+        let _span = tracing::info_span!("worktree_changes").entered();
+        but_core::diff::worktree_changes(repo)?.changes
+    };
+    let worktree_assignments = {
+        let _span =
+            tracing::info_span!("build_worktree_assignments", num_changes = worktree_changes.len())
+                .entered();
+        let mut assignments = vec![];
+        for change in &worktree_changes {
+            let diff = change.unified_patch(repo, context_lines);
+            assignments.extend(HunkAssignment::from_tree_change(
+                change,
+                diff.ok().flatten(),
+            ));
+        }
+        assignments
+    };
 
     // Reconcile worktree with the persisted assignments
-    let mut persisted_assignments = state::assignments(db.to_ref())?;
-    backfill_branch_ref_from_legacy_stack_id(&mut persisted_assignments, workspace);
-    let with_worktree = reconcile::assignments(
-        &worktree_assignments,
-        &persisted_assignments,
-        &branches_by_stack,
-        MultipleOverlapping::SetMostLines,
-        true,
-    );
+    let with_worktree = {
+        let mut persisted_assignments = state::assignments(db.to_ref())?;
+        backfill_branch_ref_from_legacy_stack_id(&mut persisted_assignments, workspace);
+        let _span = tracing::info_span!(
+            "reconcile_worktree_with_persisted",
+            num_worktree = worktree_assignments.len(),
+            num_persisted = persisted_assignments.len(),
+        )
+        .entered();
+        reconcile::assignments(
+            &worktree_assignments,
+            &persisted_assignments,
+            &branches_by_stack,
+            MultipleOverlapping::SetMostLines,
+            true,
+        )
+    };
 
     // Reconcile with the requested changes
-    let request_assignments = requests_to_assignments(requests, workspace)?;
-    let mut with_requests = reconcile::assignments(
-        &with_worktree,
-        &request_assignments,
-        &branches_by_stack,
-        MultipleOverlapping::SetMostLines,
-        true,
-    );
+    let mut with_requests = {
+        let request_assignments = requests_to_assignments(requests, workspace)?;
+        let _span = tracing::info_span!(
+            "reconcile_with_requests",
+            num_current = with_worktree.len(),
+            num_requests = request_assignments.len(),
+        )
+        .entered();
+        reconcile::assignments(
+            &with_worktree,
+            &request_assignments,
+            &branches_by_stack,
+            MultipleOverlapping::SetMostLines,
+            true,
+        )
+    };
 
-    derive_stack_ids(&mut with_requests, workspace);
-    state::set_assignments(db, with_requests)?;
+    {
+        let _span = tracing::debug_span!("derive_stack_ids").entered();
+        derive_stack_ids(&mut with_requests, workspace);
+    }
+    {
+        let _span =
+            tracing::info_span!("set_assignments", num_assignments = with_requests.len())
+                .entered();
+        state::set_assignments(db, with_requests)?;
+    }
 
     Ok(())
 }

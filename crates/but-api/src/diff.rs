@@ -287,17 +287,21 @@ pub fn assign_hunk_with_perm(
 ) -> anyhow::Result<()> {
     // this oplog entry is currently a noop (i.e. restoring it does nothing) but we do wanna
     // support it in the future so leaving it here for consistency
-    let maybe_oplog_entry = but_oplog::UnmaterializedOplogSnapshot::from_details_with_perm(
-        ctx,
-        SnapshotDetails::new(OperationKind::MoveHunk),
-        perm.read_permission(),
-        but_core::DryRun::No,
-    );
+    let maybe_oplog_entry = {
+        let _span = tracing::info_span!("oplog_snapshot_prepare").entered();
+        but_oplog::UnmaterializedOplogSnapshot::from_details_with_perm(
+            ctx,
+            SnapshotDetails::new(OperationKind::MoveHunk),
+            perm.read_permission(),
+            but_core::DryRun::No,
+        )
+    };
 
     let res = assign_hunk_only_with_perm(ctx, assignments, perm.read_permission());
     if let Some(snapshot) = maybe_oplog_entry
         && res.is_ok()
     {
+        let _span = tracing::info_span!("oplog_snapshot_commit").entered();
         snapshot.commit(ctx, perm).ok();
     }
     res
