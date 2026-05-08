@@ -35,13 +35,28 @@ enum Origin {
 /// to get a commit with a tree equal to the current worktree.
 #[instrument(skip(repo), err(Debug))]
 pub fn worktree_changes(repo: &gix::Repository) -> anyhow::Result<WorktreeChanges> {
-    worktree_changes_inner(repo, RenameTracking::Always)
+    worktree_changes_inner(repo, RenameTracking::Always, None)
 }
 
 /// Just like [`worktree_changes()`], but don't do any rename tracking for performance.
 #[instrument(skip(repo), err(Debug))]
 pub fn worktree_changes_no_renames(repo: &gix::Repository) -> anyhow::Result<WorktreeChanges> {
-    worktree_changes_inner(repo, RenameTracking::Disabled)
+    worktree_changes_inner(repo, RenameTracking::Disabled, None)
+}
+
+/// Just like [`worktree_changes()`], but scoped to only the given file `paths`.
+///
+/// This is significantly faster when only a few files need to be checked, as
+/// `gix` will use pathspec matching to avoid diffing the entire worktree.
+#[instrument(skip(repo, paths), fields(num_paths = paths.len()), err(Debug))]
+pub fn worktree_changes_for_paths(
+    repo: &gix::Repository,
+    paths: &[BString],
+) -> anyhow::Result<WorktreeChanges> {
+    if paths.is_empty() {
+        return Ok(WorktreeChanges::default());
+    }
+    worktree_changes_inner(repo, RenameTracking::Always, Some(paths))
 }
 
 enum RenameTracking {
@@ -52,6 +67,7 @@ enum RenameTracking {
 fn worktree_changes_inner(
     repo: &gix::Repository,
     renames: RenameTracking,
+    pathspecs: Option<&[BString]>,
 ) -> anyhow::Result<WorktreeChanges> {
     let (tree_index_rewrites, worktree_rewrites) = match renames {
         RenameTracking::Always => {
@@ -69,32 +85,38 @@ fn worktree_changes_inner(
             .names()
             .any(|name| modules.ignore(name).ok().flatten().is_some())
     });
-    let status_changes = repo
-        .status(gix::progress::Discard)?
-        .tree_index_track_renames(tree_index_rewrites)
-        .index_worktree_rewrites(worktree_rewrites)
-        // Learn about submodule changes, but only do the cheap checks, showing only what we could commit.
-        .index_worktree_submodules(if has_submodule_ignore_configuration {
-            gix::status::Submodule::AsConfigured { check_dirty: true }
-        } else {
-            gix::status::Submodule::Given {
-                ignore: gix::submodule::config::Ignore::Dirty,
-                check_dirty: true,
-            }
-        })
-        .index_worktree_options_mut(|opts| {
-            if let Some(opts) = opts.dirwalk_options.as_mut() {
-                opts.set_emit_ignored(None)
-                    .set_emit_pruned(false)
-                    .set_emit_tracked(false)
-                    // Don't collapse directories of untracked files, we need each match
-                    // (relevant if we had a pathspec), so that we can do rename tracking
-                    // on a per-file basis.
-                    .set_emit_untracked(EmissionMode::Matching)
-                    .set_emit_collapsed(None);
-            }
-        })
-        .into_iter(None)?;
+    let status_changes = {
+        let _span = tracing::info_span!("gix_status_into_iter").entered();
+        repo.status(gix::progress::Discard)?
+            .tree_index_track_renames(tree_index_rewrites)
+            .index_worktree_rewrites(worktree_rewrites)
+            // Learn about submodule changes, but only do the cheap checks, showing only what we could commit.
+            .index_worktree_submodules(if has_submodule_ignore_configuration {
+                gix::status::Submodule::AsConfigured { check_dirty: true }
+            } else {
+                gix::status::Submodule::Given {
+                    ignore: gix::submodule::config::Ignore::Dirty,
+                    check_dirty: true,
+                }
+            })
+            .index_worktree_options_mut(|opts| {
+                if let Some(opts) = opts.dirwalk_options.as_mut() {
+                    opts.set_emit_ignored(None)
+                        .set_emit_pruned(false)
+                        .set_emit_tracked(false)
+                        // Don't collapse directories of untracked files, we need each match
+                        // (relevant if we had a pathspec), so that we can do rename tracking
+                        // on a per-file basis.
+                        .set_emit_untracked(EmissionMode::Matching)
+                        .set_emit_collapsed(None);
+                }
+            })
+            .into_iter(pathspecs.into_iter().flatten().map(|p| {
+                let mut spec = BString::from(":(literal)");
+                spec.extend_from_slice(p.as_bstr());
+                spec
+            }))?
+    };
 
     let work_dir = repo.workdir().context("need non-bare repository")?;
     let mut tree_index_changes = Vec::new();

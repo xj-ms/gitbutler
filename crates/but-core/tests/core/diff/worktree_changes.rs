@@ -2591,6 +2591,59 @@ WorktreeChanges {
     Ok(())
 }
 
+#[test]
+fn worktree_changes_for_paths_empty_and_scoped() -> Result<()> {
+    let repo = repo("added-modified-in-worktree")?;
+
+    let empty = diff::worktree_changes_for_paths(&repo, &[])?;
+    assert!(
+        empty.changes.is_empty(),
+        "empty paths should not fall back to diffing the entire worktree"
+    );
+    assert!(empty.ignored_changes.is_empty());
+
+    let scoped = diff::worktree_changes_for_paths(&repo, &["modified".into()])?;
+    assert_eq!(scoped.changes.len(), 1);
+    assert_eq!(scoped.changes[0].path, "modified");
+    Ok(())
+}
+
+#[test]
+fn worktree_changes_for_paths_rename_with_both_paths() -> Result<()> {
+    let repo = repo("renamed-in-worktree")?;
+    let scoped =
+        diff::worktree_changes_for_paths(&repo, &["new-name".into(), "to-be-renamed".into()])?;
+    assert_eq!(scoped.changes.len(), 1);
+    assert_eq!(scoped.changes[0].path, "new-name");
+    assert_eq!(
+        scoped.changes[0].previous_path(),
+        Some("to-be-renamed".into())
+    );
+    Ok(())
+}
+
+#[test]
+fn worktree_changes_for_paths_literal_glob_characters() -> Result<()> {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let repo = gix::init(tmp.path())?;
+    let bracket_dir = tmp.path().join("src").join("[slug]");
+    std::fs::create_dir_all(&bracket_dir)?;
+    std::fs::write(
+        bracket_dir.join("page.tsx"),
+        "export default function Page() {}\n",
+    )?;
+    std::fs::write(tmp.path().join("other.txt"), "other\n")?;
+
+    let scoped = diff::worktree_changes_for_paths(&repo, &["src/[slug]/page.tsx".into()])?;
+    assert_eq!(
+        scoped.changes.len(),
+        1,
+        "literal pathspec should match paths containing '[' and ']'"
+    );
+    assert_eq!(scoped.changes[0].path, "src/[slug]/page.tsx");
+    Ok(())
+}
+
 fn unified_patches(
     worktree: WorktreeChanges,
     repo: &gix::Repository,
