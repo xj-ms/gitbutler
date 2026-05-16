@@ -6,7 +6,6 @@ use but_core::{
 use but_ctx::Context;
 use but_hunk_assignment::{HunkAssignmentRequest, WorktreeChanges};
 use but_hunk_dependency::ui::hunk_dependencies_for_workspace_changes_by_worktree_dir;
-use but_oplog::legacy::{OperationKind, SnapshotDetails};
 use gix::prelude::ObjectIdExt;
 use tracing::instrument;
 
@@ -274,35 +273,13 @@ pub fn assign_hunk(
     assign_hunk_with_perm(ctx, assignments, guard.write_permission())
 }
 
-/// Persists `assignments` under caller-held exclusive repository access and
-/// records an oplog snapshot on success.
-///
-/// It behaves like [`assign_hunk_only_with_perm()`], but first prepares a
-/// best-effort `MoveHunk` oplog snapshot and commits the snapshot only if the
-/// assignment succeeds.
+/// Persists `assignments` under caller-held exclusive repository access.
 pub fn assign_hunk_with_perm(
     ctx: &Context,
     assignments: Vec<HunkAssignmentRequest>,
     perm: &mut RepoExclusive,
 ) -> anyhow::Result<()> {
-    // this oplog entry is currently a noop (i.e. restoring it does nothing) but we do wanna
-    // support it in the future so leaving it here for consistency
-    let maybe_oplog_entry = {
-        let _span = tracing::info_span!("oplog_snapshot_prepare").entered();
-        but_oplog::UnmaterializedOplogSnapshot::from_details_with_perm(
-            ctx,
-            SnapshotDetails::new(OperationKind::MoveHunk),
-            perm.read_permission(),
-            but_core::DryRun::No,
-        )
-    };
-
-    let res = assign_hunk_only_with_perm(ctx, assignments, perm.read_permission());
-    if let Some(snapshot) = maybe_oplog_entry
-        && res.is_ok()
-    {
-        let _span = tracing::info_span!("oplog_snapshot_commit").entered();
-        snapshot.commit(ctx, perm).ok();
-    }
-    res
+    // The oplog entry for MoveHunk is currently a noop (restoring it does
+    // nothing), so skip the expensive snapshot until it is actually wired up.
+    assign_hunk_only_with_perm(ctx, assignments, perm.read_permission())
 }
