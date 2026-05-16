@@ -127,6 +127,9 @@
 //! so in that case it should be fine to fallback to using the first parent.
 mod input;
 
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
+
 use but_core::{TreeChange, UnifiedPatch};
 use gix::trace;
 pub use input::{InputCommit, InputDiffHunk, InputFile, InputStack};
@@ -136,6 +139,19 @@ pub use ranges::{CalculationError, HunkRange, WorkspaceRanges};
 use tracing::instrument;
 
 use crate::ui::HunkLockTarget;
+
+/// Global cache for commit tree diffs.
+///
+/// Keyed by `commit_id` alone — a commit's parent and tree are embedded in the
+/// commit object, so the diff is deterministic for any given commit ID.
+/// Commits that are no longer part of the active workspace are pruned
+/// automatically in [`new_stacks_to_input_stacks()`].
+static COMMIT_DIFF_CACHE: LazyLock<Mutex<HashMap<gix::ObjectId, Vec<InputFile>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn commit_diff_cache() -> std::sync::MutexGuard<'static, HashMap<gix::ObjectId, Vec<InputFile>>> {
+    COMMIT_DIFF_CACHE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Types and conversions for use in `tauri`.
 pub mod ui;
@@ -148,21 +164,26 @@ pub fn new_stacks_to_input_stacks(
     repo: &gix::Repository,
     workspace: &but_graph::Workspace,
 ) -> anyhow::Result<Vec<InputStack>> {
-    tracing::info!(
-        num_stacks = workspace.stacks.len(),
-        total_commits = workspace
-            .stacks
-            .iter()
-            .map(|s| s
-                .segments
+    let total_commits: usize = workspace
+        .stacks
+        .iter()
+        .map(|s| {
+            s.segments
                 .iter()
                 .map(|seg| seg.commits.len())
-                .sum::<usize>())
-            .sum::<usize>(),
+                .sum::<usize>()
+        })
+        .sum();
+
+    tracing::info!(
+        num_stacks = workspace.stacks.len(),
+        total_commits,
         "processing stacks"
     );
 
-    workspace
+    let mut had_miss = false;
+
+    let result = workspace
         .stacks
         .iter()
         .enumerate()
@@ -180,24 +201,39 @@ pub fn new_stacks_to_input_stacks(
                 .iter()
                 .flat_map(|s| &s.commits)
                 .map(|commit| {
-                    let commit = repo.find_commit(commit.id)?;
-                    let tree_changes = {
-                        let _span = tracing::debug_span!("tree_changes", commit_id = %commit.id).entered();
-                        but_core::diff::tree_changes(
-                            repo,
-                            commit.parent_ids().next().map(|id| id.detach()),
-                            commit.id,
-                        )?
-                    };
-                    let files = {
-                        let _span = tracing::debug_span!("tree_changes_to_input_files", num_changes = tree_changes.len()).entered();
-                        tree_changes_to_input_files(repo, tree_changes)?
+                    let commit_id = commit.id;
+
+                    // Check cache first — commit diffs are immutable (content-addressed).
+                    let cached = commit_diff_cache().get(&commit_id).cloned();
+
+                    let files = match cached {
+                        Some(cached) => {
+                            tracing::debug!(%commit_id, "cache hit");
+                            cached
+                        }
+                        None => {
+                            had_miss = true;
+                            let commit = repo.find_commit(commit_id)?;
+                            let parent_id = commit.parent_ids().next().map(|id| id.detach());
+                            let tree_changes = {
+                                let _span =
+                                    tracing::debug_span!("tree_changes", %commit_id).entered();
+                                but_core::diff::tree_changes(repo, parent_id, commit_id)?
+                            };
+                            let computed = {
+                                let _span = tracing::debug_span!(
+                                    "tree_changes_to_input_files",
+                                    num_changes = tree_changes.len()
+                                )
+                                .entered();
+                                tree_changes_to_input_files(repo, tree_changes)?
+                            };
+                            commit_diff_cache().insert(commit_id, computed.clone());
+                            computed
+                        }
                     };
 
-                    Ok(InputCommit {
-                        commit_id: commit.id,
-                        files,
-                    })
+                    Ok(InputCommit { commit_id, files })
                 })
                 .rev()
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -209,7 +245,33 @@ pub fn new_stacks_to_input_stacks(
                 commits_from_base_to_tip: commits,
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // Evict commits that are no longer part of the workspace.
+    {
+        let mut cache = commit_diff_cache();
+        if had_miss || cache.len() > total_commits {
+            let active_commits: HashSet<gix::ObjectId> = workspace
+                .stacks
+                .iter()
+                .flat_map(|s| &s.segments)
+                .flat_map(|seg| &seg.commits)
+                .map(|c| c.id)
+                .collect();
+            let before = cache.len();
+            cache.retain(|id, _| active_commits.contains(id));
+            let evicted = before - cache.len();
+            if evicted > 0 {
+                tracing::debug!(
+                    evicted,
+                    remaining = cache.len(),
+                    "pruned obsolete commits from commit diff cache"
+                );
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 /// Turn `changes` with [`TreeChange`] instances into [`InputFile`], one for each input.
@@ -235,4 +297,73 @@ pub fn tree_changes_to_input_files(
         })
     }
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commit_diff_cache_populates_hits_and_prunes_obsolete_commits() -> anyhow::Result<()> {
+        let (repo, _tmpdir) = but_testsupport::writable_scenario("independent-commits-multi-stack");
+        let ctx = but_ctx::Context::from_repo(repo)?;
+        let (_guard, repo, ws, _) = ctx.workspace_and_db()?;
+
+        commit_diff_cache().clear();
+
+        // 1. Cold call populates all commits in the workspace.
+        let first = new_stacks_to_input_stacks(&repo, &ws)?;
+        let all_commits: HashSet<gix::ObjectId> = ws
+            .stacks
+            .iter()
+            .flat_map(|s| &s.segments)
+            .flat_map(|seg| &seg.commits)
+            .map(|c| c.id)
+            .collect();
+        assert!(
+            all_commits.len() > 1,
+            "expected multiple commits in fixture"
+        );
+        assert_eq!(commit_diff_cache().len(), all_commits.len());
+        for id in &all_commits {
+            assert!(commit_diff_cache().contains_key(id));
+        }
+
+        // 2. Warm call hits the cache and produces identical InputStacks.
+        let second = new_stacks_to_input_stacks(&repo, &ws)?;
+        assert_eq!(first, second);
+        assert_eq!(commit_diff_cache().len(), all_commits.len());
+
+        // 3. When a stack is removed from the workspace, only its commits are
+        //    pruned and the remaining stack's commits stay cached.
+        let mut reduced_ws = ws.clone();
+        let removed_stack = reduced_ws.stacks.pop().expect("at least two stacks");
+        let removed_commits: HashSet<gix::ObjectId> = removed_stack
+            .segments
+            .iter()
+            .flat_map(|seg| &seg.commits)
+            .map(|c| c.id)
+            .collect();
+        let remaining_commits: HashSet<gix::ObjectId> = reduced_ws
+            .stacks
+            .iter()
+            .flat_map(|s| &s.segments)
+            .flat_map(|seg| &seg.commits)
+            .map(|c| c.id)
+            .collect();
+        assert!(!removed_commits.is_empty());
+        assert!(!remaining_commits.is_empty());
+
+        let reduced = new_stacks_to_input_stacks(&repo, &reduced_ws)?;
+        assert_eq!(reduced.len(), reduced_ws.stacks.len());
+        assert_eq!(commit_diff_cache().len(), remaining_commits.len());
+        for id in &remaining_commits {
+            assert!(commit_diff_cache().contains_key(id));
+        }
+        for id in &removed_commits {
+            assert!(!commit_diff_cache().contains_key(id));
+        }
+
+        Ok(())
+    }
 }
