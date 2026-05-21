@@ -52,6 +52,7 @@ fn worktree_changes_inner(
     repo: &gix::Repository,
     renames: RenameTracking,
 ) -> anyhow::Result<WorktreeChanges> {
+    let _outer = tracing::info_span!("worktree_changes_inner").entered();
     let (tree_index_rewrites, worktree_rewrites) = match renames {
         RenameTracking::Always => {
             let rewrites = gix::diff::Rewrites::default(); /* standard Git rewrite handling for everything */

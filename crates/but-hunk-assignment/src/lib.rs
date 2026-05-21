@@ -520,6 +520,7 @@ pub fn unassigned(
     worktree_changes: impl IntoIterator<Item = impl Into<but_core::TreeChange>>,
     context_lines: u32,
 ) -> Vec<HunkAssignment> {
+    let _span = tracing::info_span!("build_worktree_assignments").entered();
     but_core::hunks_from_changes(repo, worktree_changes, context_lines)
         .into_iter()
         .map(HunkAssignment::from_hunk)
