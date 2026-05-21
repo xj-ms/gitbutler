@@ -195,6 +195,7 @@ impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
     }
 
     /// Materializes a history rewrite.
+    #[tracing::instrument(skip(self, materialize_options))]
     pub fn materialize(
         mut self,
         materialize_options: MaterializeOptions,
@@ -211,9 +212,11 @@ impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
         }
 
         let repo = self.repo.clone();
+        let _persist_span = tracing::info_span!("persist_objects").entered();
         if let Some(memory) = self.repo.objects.take_object_memory() {
             memory.persist(&self.repo)?;
         }
+        drop(_persist_span);
 
         let specs = self.linked_checkout_specs()?;
         let detached_head_edits = detached_worktree_head_edits(&specs)?;
@@ -282,12 +285,18 @@ impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
                 deref: false,
             });
         }
+        {
+            let _span =
+                tracing::info_span!("edit_references", num_edits = ref_edits.len()).entered();
+            repo.edit_references(ref_edits)?;
+        }
 
-        repo.edit_references(ref_edits)?;
-
-        let project_meta = self.workspace.graph.project_meta.clone();
-        self.workspace
-            .refresh_from_head(&repo, &*self.meta, project_meta, &mut *self.db)?;
+        {
+            let _span = tracing::info_span!("refresh_from_head").entered();
+            let project_meta = self.workspace.graph.project_meta.clone();
+            self.workspace
+                .refresh_from_head(&repo, &*self.meta, project_meta, &mut *self.db)?;
+        }
 
         Ok(MaterializeOutcome {
             graph: self.graph,

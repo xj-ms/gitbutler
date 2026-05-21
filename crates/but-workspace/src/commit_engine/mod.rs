@@ -120,6 +120,7 @@ pub struct CreateCommitOutcome {
 /// This works because internally, it will always match the hunks (and sub-hunks) with their respective pairs obtained through a
 /// worktree status, using the anchor, and apply an additional processing step to get the actual old/new hunk pairs to use when
 /// building the buffer to commit.
+#[tracing::instrument(skip(repo, changes), fields(num_changes = changes.len()))]
 pub fn create_commit(
     repo: &gix::Repository,
     destination: Destination,
@@ -169,7 +170,10 @@ pub fn create_commit(
         rejected_specs,
         destination_tree,
         changed_tree_pre_cherry_pick,
-    } = create_tree(repo, target_tree, changes, context_lines)?;
+    } = {
+        let _span = tracing::info_span!("create_tree", %target_tree).entered();
+        create_tree(repo, target_tree, changes, context_lines)?
+    };
     let new_commit = if let Some(new_tree) = destination_tree {
         match destination {
             Destination::NewCommit {

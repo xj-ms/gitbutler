@@ -617,6 +617,11 @@ fn reconcile_worktree_changes_with_worktree(
         return Ok(vec![]);
     }
     let mut worktree_assignments = vec![];
+    let _span = tracing::info_span!(
+        "build_worktree_assignments",
+        num_changes = worktree_changes.len()
+    )
+    .entered();
     for change in &worktree_changes {
         let diff = change.unified_patch(repo, context_lines);
         worktree_assignments.extend(HunkAssignment::from_tree_change(
@@ -624,6 +629,7 @@ fn reconcile_worktree_changes_with_worktree(
             diff.ok().flatten(),
         ));
     }
+    drop(_span);
     let previous_paths: HashMap<BString, BString> = worktree_changes
         .iter()
         .filter_map(|c| c.previous_path().map(|prev| (c.path.clone(), prev.into())))

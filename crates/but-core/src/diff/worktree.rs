@@ -69,6 +69,7 @@ fn worktree_changes_inner(
     renames: RenameTracking,
     pathspecs: Option<&[BString]>,
 ) -> anyhow::Result<WorktreeChanges> {
+    let _outer = tracing::info_span!("worktree_changes_inner").entered();
     let (tree_index_rewrites, worktree_rewrites) = match renames {
         RenameTracking::Always => {
             let rewrites = gix::diff::Rewrites::default(); /* standard Git rewrite handling for everything */
@@ -85,36 +86,38 @@ fn worktree_changes_inner(
             .names()
             .any(|name| modules.ignore(name).ok().flatten().is_some())
     });
-    let status_changes = repo
-        .status(gix::progress::Discard)?
-        .tree_index_track_renames(tree_index_rewrites)
-        .index_worktree_rewrites(worktree_rewrites)
-        // Learn about submodule changes, but only do the cheap checks, showing only what we could commit.
-        .index_worktree_submodules(if has_submodule_ignore_configuration {
-            gix::status::Submodule::AsConfigured { check_dirty: true }
-        } else {
-            gix::status::Submodule::Given {
-                ignore: gix::submodule::config::Ignore::Dirty,
-                check_dirty: true,
-            }
-        })
-        .index_worktree_options_mut(|opts| {
-            if let Some(opts) = opts.dirwalk_options.as_mut() {
-                opts.set_emit_ignored(None)
-                    .set_emit_pruned(false)
-                    .set_emit_tracked(false)
-                    // Don't collapse directories of untracked files, we need each match
-                    // (relevant if we had a pathspec), so that we can do rename tracking
-                    // on a per-file basis.
-                    .set_emit_untracked(EmissionMode::Matching)
-                    .set_emit_collapsed(None);
-            }
-        })
-        .into_iter(pathspecs.into_iter().flatten().map(|p| {
-            let mut spec = BString::from(":(literal)");
-            spec.extend_from_slice(p.as_bstr());
-            spec
-        }))?;
+    let status_changes = {
+        let _span = tracing::info_span!("gix_status_into_iter").entered();
+        repo.status(gix::progress::Discard)?
+            .tree_index_track_renames(tree_index_rewrites)
+            .index_worktree_rewrites(worktree_rewrites)
+            // Learn about submodule changes, but only do the cheap checks, showing only what we could commit.
+            .index_worktree_submodules(if has_submodule_ignore_configuration {
+                gix::status::Submodule::AsConfigured { check_dirty: true }
+            } else {
+                gix::status::Submodule::Given {
+                    ignore: gix::submodule::config::Ignore::Dirty,
+                    check_dirty: true,
+                }
+            })
+            .index_worktree_options_mut(|opts| {
+                if let Some(opts) = opts.dirwalk_options.as_mut() {
+                    opts.set_emit_ignored(None)
+                        .set_emit_pruned(false)
+                        .set_emit_tracked(false)
+                        // Don't collapse directories of untracked files, we need each match
+                        // (relevant if we had a pathspec), so that we can do rename tracking
+                        // on a per-file basis.
+                        .set_emit_untracked(EmissionMode::Matching)
+                        .set_emit_collapsed(None);
+                }
+            })
+            .into_iter(pathspecs.into_iter().flatten().map(|p| {
+                let mut spec = BString::from(":(literal)");
+                spec.extend_from_slice(p.as_bstr());
+                spec
+            }))?
+    };
 
     let work_dir = repo.workdir().context("need non-bare repository")?;
     let mut tree_index_changes = Vec::new();

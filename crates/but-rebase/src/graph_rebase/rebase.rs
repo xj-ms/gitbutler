@@ -18,9 +18,12 @@ use crate::graph_rebase::{
 
 impl<'ws, 'graph, M: RefMetadata> Editor<'ws, 'graph, M> {
     /// Perform the rebase
+    #[tracing::instrument(skip(self), fields(num_steps))]
     pub fn rebase(self) -> Result<SuccessfulRebase<'ws, 'graph, M>> {
         let mut ref_edits = vec![];
         let steps_to_pick = order_steps_picking(&self.graph)?;
+
+        tracing::Span::current().record("num_steps", steps_to_pick.len());
 
         // A 1 to 1 mapping between the incoming graph and the output graph
         let mut graph_mapping: HashMap<StepGraphIndex, StepGraphIndex> = HashMap::new();

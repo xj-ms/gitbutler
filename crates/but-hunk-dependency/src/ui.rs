@@ -12,7 +12,10 @@ fn hunk_dependencies_for_changes(
     // accelerate tree-tree-diffs
     let repo = repo.clone().for_tree_diffing()?.with_object_memory();
     let input_stacks = crate::new_stacks_to_input_stacks(&repo, workspace)?;
+    let _span = tracing::info_span!("workspace_ranges_from_stacks").entered();
     let ranges = crate::WorkspaceRanges::try_from_stacks(input_stacks)?;
+    drop(_span);
+    let _span = tracing::info_span!("hunk_deps_from_ranges", num_changes = changes.len()).entered();
     HunkDependencies::try_from_workspace_ranges(&repo, ranges, changes)
 }
 

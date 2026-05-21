@@ -42,6 +42,7 @@ impl<'ws, 'meta, M: RefMetadata> Editor<'ws, 'meta, M> {
         repo: &gix::Repository,
         db: &'meta mut but_db::DbHandle,
     ) -> Result<Self> {
+        let _span = tracing::info_span!("Editor::create").entered();
         Self::create_with_opts(workspace, meta, repo, db, &GraphEditorOptions::default())
     }
 
