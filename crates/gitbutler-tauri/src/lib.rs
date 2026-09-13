@@ -24,6 +24,8 @@ pub use window::state::{WindowState, event::ChangeForFrontend};
 
 pub mod askpass;
 pub mod debug;
+#[cfg(all(target_os = "windows", debug_assertions))]
+pub mod debug_console;
 pub mod projects;
 
 pub mod settings;
