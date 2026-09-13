@@ -123,6 +123,10 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             .build(handle)?,
     ])?;
 
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    view_menu
+        .append(&MenuItemBuilder::with_id("view/debug-console", "Debug Console").build(handle)?)?;
+
     let mut project_menu_builder = SubmenuBuilder::new(handle, "Project")
         .item(
             &MenuItemBuilder::with_id("project/history", "Operations History")
@@ -242,6 +246,12 @@ pub fn handle_event(webview: &WebviewWindow, event: &MenuEvent) {
             }
             return;
         }
+    }
+
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    if event.id() == "view/debug-console" {
+        crate::debug_console::toggle();
+        return;
     }
 
     if event.id() == "view/switch-theme" {

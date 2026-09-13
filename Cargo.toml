@@ -314,6 +314,8 @@ sapling-renderdag = "0.1.0"
 # This was relevant to force `git-meta` to use our version.
 gix = { git = "https://github.com/GitoxideLabs/gitoxide", rev = "dda600d7ee29a6bda4cf1047d0d1782e76b16f98" }
 git2 = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f6843504339fe7434ee0732a3e968f3e" }
+# Include the Windows input-lock deadlock fix from tauri-apps/tao#1215.
+tao = { git = "https://github.com/tauri-apps/tao", rev = "c704261c519c58cfdd0bc2d58ba24e06a0b71c92" }
 
 [workspace.lints.clippy]
 # Note that `all` doesn't include everything, so extra lints should be added here.

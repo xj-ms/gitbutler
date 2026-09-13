@@ -81,6 +81,13 @@ document-features = { version = "0.2", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-trafficlights-positioner = { git = "https://github.com/gitbutlerapp/tauri-plugin-trafficlights-positioner", branch = "v2" }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.0", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [lints]
 workspace = true
 
