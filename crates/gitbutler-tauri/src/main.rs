@@ -39,6 +39,9 @@ fn main() -> anyhow::Result<()> {
         std::env::remove_var(but_gpui::INSTALL_UPDATE);
     };
     but_api::panic_capture::install_panic_hook();
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    gitbutler_tauri::debug_console::initialize();
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -140,7 +143,6 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&app_data_dir).context("failed to create app data dir")?;
     std::fs::create_dir_all(&app_cache_dir).context("failed to create app cache dir")?;
     std::fs::create_dir_all(&app_log_dir).context("failed to create app log dir")?;
-
     let tokio_debug = matches!(std::env::var("GITBUTLER_TOKIO_DEBUG").as_deref(), Ok("1"));
     runtime.block_on(async {
         tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -173,6 +175,8 @@ fn main() -> anyhow::Result<()> {
                 let app_handle = tauri_app.handle();
 
                 logs::init(app_handle, &app_log_dir, performance_logging, tokio_debug);
+                #[cfg(all(target_os = "windows", debug_assertions))]
+                gitbutler_tauri::debug_console::hide_at_startup();
 
                 #[cfg(target_os = "macos")]
                 but_action::cli::auto_fix_broken_but_cli_symlink();
