@@ -3,6 +3,7 @@
 	import CliSymlinkSetup from "$components/settings/CliSymlinkSetup.svelte";
 	import AccessTokenSignIn from "$components/shared/AccessTokenSignIn.svelte";
 	import { BACKEND } from "$lib/backend";
+	import { getEditorOptions } from "$lib/backend/editor";
 	import { getUserErrorCode } from "$lib/backend/ipc";
 	import { CLI_MANAGER } from "$lib/config/cli";
 	import { showToast } from "$lib/notifications/toasts";
@@ -62,16 +63,7 @@
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
 	const defaultTerminal = uiState.global.defaultTerminal;
 
-	const editorOptions: CodeEditorSettings[] = [
-		{ schemeIdentifer: "vscodium", displayName: "VSCodium" },
-		{ schemeIdentifer: "vscode", displayName: "VSCode" },
-		{ schemeIdentifer: "vscode-insiders", displayName: "VSCode Insiders" },
-		{ schemeIdentifer: "windsurf", displayName: "Windsurf" },
-		{ schemeIdentifer: "zed", displayName: "Zed" },
-		{ schemeIdentifer: "cursor", displayName: "Cursor" },
-		{ schemeIdentifer: "trae", displayName: "Trae" },
-		{ schemeIdentifer: "antigravity-ide", displayName: "Antigravity IDE" },
-	];
+	const editorOptions: CodeEditorSettings[] = getEditorOptions(platformName);
 	const editorOptionsForSelect = editorOptions.map((option) => ({
 		label: option.displayName,
 		value: option.schemeIdentifer,
