@@ -13,11 +13,11 @@
 </script>
 
 <script lang="ts">
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import { BACKEND } from "$lib/backend";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { isDiffHunk, lineIdsToHunkHeaders } from "$lib/hunks/hunk";
 	import { laneIdOf } from "$lib/linkedWorktrees/lane";
-	import { vscodePath } from "$lib/project/project";
 	import { type SelectionId } from "$lib/selection/key";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { UI_STATE } from "$lib/state/uiState.svelte";
@@ -57,8 +57,8 @@
 
 	const stackService = inject(STACK_SERVICE);
 	const uiState = inject(UI_STATE);
-	const urlService = inject(URL_SERVICE);
 	const fileService = inject(FILE_SERVICE);
+	const backend = inject(BACKEND);
 
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
 
@@ -214,19 +214,22 @@
 					label="Open in {defaultCodeEditor.current.displayName}"
 					icon="open-in-ide"
 					onclick={async () => {
-						const absolutePath = await fileService.workdirPath(
+						const projectPath = await fileService.workdirPath(
 							projectId,
 							selectionId.worktree,
-							filePath,
+							"",
 						);
 						// Use specific line number if available, otherwise use hunk start line
-						const lineNumber = item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
-						const path = getEditorUri({
-							schemeId: defaultCodeEditor.current.schemeIdentifer,
-							path: [vscodePath(absolutePath)],
+						const lineNumber =
+							item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
+						await openFileInEditor(backend, {
+							editorId: defaultCodeEditor.current.schemeIdentifer,
+							projectId,
+							worktree: selectionId.worktree,
+							projectPath,
+							filePath,
 							line: lineNumber,
 						});
-						urlService.openExternalUrl(path);
 						menuOpen = false;
 					}}
 				/>

@@ -827,9 +827,15 @@ pub fn open_in_program(
     let resolved_path = resolve_workdir_path(ctx, &checkout, &path)?;
 
     let program_specs = list_program_specs();
+    #[cfg(target_os = "windows")]
+    let vs_fallback = (program_id == "visualstudio").then(crate::open::program::visual_studio_program_spec);
+    #[cfg(not(target_os = "windows"))]
+    let vs_fallback: Option<ProgramSpec> = None;
+
     if let Some(program) = program_specs
         .iter()
         .find(|program| program.id == program_id)
+        .or(vs_fallback.as_ref())
         && !program.requires_terminal()
     {
         let open_spec = match line_nr {
