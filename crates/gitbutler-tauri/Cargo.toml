@@ -85,6 +85,9 @@ tauri-plugin-trafficlights-positioner = { git = "https://github.com/gitbutlerapp
 [lints]
 workspace = true
 
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+tauri = { version = "^2.11.1", features = ["test"] }
+
 [features]
 default = ["custom-protocol", "devtools", "opener"]
 #! ## Build- and package-related Options

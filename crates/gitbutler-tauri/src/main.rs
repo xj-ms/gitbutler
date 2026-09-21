@@ -258,6 +258,7 @@ fn main() -> anyhow::Result<()> {
             .plugin(tauri_plugin_store::Builder::default().build())
             .plugin(log.build())
             .invoke_handler(tauri::generate_handler![
+                menu::menu_item_set_enabled,
                 github::tauri_init_github_device_oauth::init_github_device_oauth,
                 github::tauri_check_github_auth_status::check_github_auth_status,
                 github::tauri_store_github_pat::store_github_pat,
@@ -350,6 +351,7 @@ fn main() -> anyhow::Result<()> {
                 legacy::modes::tauri_abort_edit_and_return_to_workspace::abort_edit_and_return_to_workspace,
                 legacy::modes::tauri_edit_initial_index_state::edit_initial_index_state,
                 legacy::modes::tauri_edit_changes_from_initial::edit_changes_from_initial,
+                but_api::open::tauri_open_in_program::open_in_program,
                 open::tauri_open_url::open_url,
                 open::tauri_open_in_terminal::open_in_terminal,
                 open::tauri_show_in_finder::show_in_finder,
