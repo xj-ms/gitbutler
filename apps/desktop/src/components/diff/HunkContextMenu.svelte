@@ -13,9 +13,9 @@
 </script>
 
 <script lang="ts">
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import { BACKEND } from "$lib/backend";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { isDiffHunk, lineIdsToHunkHeaders } from "$lib/hunks/hunk";
-	import { vscodePath } from "$lib/project/project";
 	import { PROJECTS_SERVICE } from "$lib/project/projectsService";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { UI_STATE } from "$lib/state/uiState.svelte";
@@ -53,7 +53,7 @@
 	const stackService = inject(STACK_SERVICE);
 	const uiState = inject(UI_STATE);
 	const projectService = inject(PROJECTS_SERVICE);
-	const urlService = inject(URL_SERVICE);
+	const backend = inject(BACKEND);
 
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
 
@@ -209,12 +209,13 @@
 							// Use specific line number if available, otherwise use hunk start line
 							const lineNumber =
 								item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
-							const path = getEditorUri({
-								schemeId: defaultCodeEditor.current.schemeIdentifer,
-								path: [vscodePath(project.path), filePath],
+							await openFileInEditor(backend, {
+								editorId: defaultCodeEditor.current.schemeIdentifer,
+								projectId,
+								projectPath: project.path,
+								filePath,
 								line: lineNumber,
 							});
-							urlService.openExternalUrl(path);
 						}
 						menuOpen = false;
 					}}

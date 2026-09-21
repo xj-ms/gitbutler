@@ -7,6 +7,8 @@ use std::{
 
 use crate::open::spawn::spawn_and_reap;
 
+#[cfg(target_os = "windows")]
+use anyhow::Context as _;
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
@@ -157,6 +159,8 @@ impl ProgramSpec {
             ExecutableProgram::PathExecutable(PathExecutable { requires_tty, .. }) => *requires_tty,
             #[cfg(target_os = "macos")]
             ExecutableProgram::MacosApplication(_) => false,
+            #[cfg(target_os = "windows")]
+            ExecutableProgram::VisualStudio => false,
         }
     }
 }
@@ -181,6 +185,9 @@ pub enum ExecutableProgram {
     /// A macOS application installed s.t. it has a bundle identifier.
     #[cfg(target_os = "macos")]
     MacosApplication(MacosApplication),
+    /// Visual Studio (`devenv.exe`), discovered via `vswhere.exe` on Windows.
+    #[cfg(target_os = "windows")]
+    VisualStudio,
 }
 
 impl From<UserDefinedExecutableProgram> for ExecutableProgram {
@@ -223,6 +230,8 @@ enum CliArgumentSupplier {
     Neovim,
     Sublime,
     Custom(CustomCliArgumentSupplier),
+    #[cfg(target_os = "windows")]
+    VisualStudio,
     #[cfg(all(target_os = "macos", not(debug_assertions)))]
     #[allow(dead_code)]
     Xcode,
@@ -238,6 +247,12 @@ impl CliArgumentSupplier {
             Self::VSCodeLike => cmd.arg("--goto").arg(self.path_with_line_nr(path, line_nr)),
             Self::Zed => cmd.arg(self.path_with_line_nr(path, line_nr)),
             Self::Sublime => cmd.arg(self.path_with_line_nr(path, line_nr)),
+            #[cfg(target_os = "windows")]
+            Self::VisualStudio => cmd
+                .arg("/Edit")
+                .arg(path)
+                .arg("/Command")
+                .arg(format!("Edit.Goto {line_nr}")),
             #[cfg(all(target_os = "macos", not(debug_assertions)))]
             Self::Xcode => cmd.arg("--line").arg(line_nr.to_string()).arg(path),
             Self::Neovim => cmd.arg(format!("+{line_nr}")).arg(path),
@@ -251,6 +266,8 @@ impl CliArgumentSupplier {
     /// Add argument(s) to `cmd` to open the file.
     fn open<'a>(&self, cmd: &'a mut Command, path: &Path) -> &'a mut Command {
         match self {
+            #[cfg(target_os = "windows")]
+            Self::VisualStudio => cmd.arg("/Edit").arg(path),
             Self::Custom(custom) => custom.open(cmd, path),
             _ => cmd.arg(path),
         };
@@ -264,6 +281,14 @@ impl CliArgumentSupplier {
         paths: &NonEmpty<P>,
     ) -> &'a mut Command {
         match self {
+            #[cfg(target_os = "windows")]
+            Self::VisualStudio => {
+                cmd.arg("/Edit");
+                for path in paths {
+                    cmd.arg(path.as_ref());
+                }
+                cmd
+            }
             Self::Custom(custom) => custom.open_many(cmd, paths),
             _ => {
                 for path in paths {
@@ -446,6 +471,8 @@ pub(crate) static PROGRAMS: LazyLock<Vec<ProgramSpec>> = LazyLock::new(|| {
             category: ProgramCategory::Editor,
             extensions: None,
         },
+        #[cfg(all(target_os = "windows", not(debug_assertions)))]
+        visual_studio_program_spec(),
         ProgramSpec {
             id: "zed".into(),
             name: "Zed".into(),
@@ -514,6 +541,18 @@ pub(crate) static PROGRAMS: LazyLock<Vec<ProgramSpec>> = LazyLock::new(|| {
     ])
 });
 
+#[cfg(target_os = "windows")]
+pub(crate) fn visual_studio_program_spec() -> ProgramSpec {
+    ProgramSpec {
+        id: "visualstudio".into(),
+        name: "Visual Studio".into(),
+        cli_arg_supplier: CliArgumentSupplier::VisualStudio,
+        executable: ExecutableProgram::VisualStudio,
+        category: ProgramCategory::Editor,
+        extensions: None,
+    }
+}
+
 /// Specification to open.
 pub enum OpenSpec {
     /// A single file.
@@ -539,7 +578,80 @@ pub fn open_in_program_unchecked(program: &ProgramSpec, open_spec: OpenSpec) -> 
         ExecutableProgram::MacosApplication(macos_application) => {
             open_in_macos_application(macos_application, &program.cli_arg_supplier, open_spec)
         }
+        #[cfg(target_os = "windows")]
+        ExecutableProgram::VisualStudio => {
+            let executable = resolve_visual_studio_executable()?;
+            let path_executable = PathExecutable {
+                name_or_path: executable.to_string_lossy().into_owned(),
+                requires_tty: false,
+            };
+            open_in_path_executable(&path_executable, &program.cli_arg_supplier, open_spec)
+        }
     }
+}
+
+#[cfg(target_os = "windows")]
+const VSWHERE_ARGS: &[&str] = &[
+    "-latest",
+    "-prerelease",
+    "-products",
+    "*",
+    "-requires",
+    "Microsoft.VisualStudio.Component.CoreEditor",
+    "-find",
+    r"Common7\IDE\devenv.exe",
+];
+
+#[cfg(target_os = "windows")]
+fn resolve_visual_studio_executable() -> anyhow::Result<PathBuf> {
+    let vswhere = std::env::var_os("ProgramFiles(x86)")
+        .map(PathBuf::from)
+        .map(|path| {
+            path.join("Microsoft Visual Studio")
+                .join("Installer")
+                .join("vswhere.exe")
+        })
+        .filter(|path| path.is_file())
+        .or_else(|| which::which("vswhere.exe").ok())
+        .context(
+            "Visual Studio could not be located because vswhere.exe is unavailable. \
+             Install Visual Studio 2017 or later with the Visual Studio Installer.",
+        )?;
+
+    let output = Command::new(&vswhere)
+        .args(VSWHERE_ARGS)
+        .output()
+        .with_context(|| format!("Failed to run '{}'", vswhere.display()))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Visual Studio discovery failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let executable = parse_visual_studio_executable(&output.stdout).context(
+        "No Visual Studio installation with the core editor was found. \
+         Install Visual Studio and try again.",
+    )?;
+
+    if !executable.is_file() {
+        anyhow::bail!(
+            "Visual Studio was found, but devenv.exe does not exist at '{}'",
+            executable.display()
+        );
+    }
+
+    Ok(executable)
+}
+
+#[cfg(target_os = "windows")]
+fn parse_visual_studio_executable(output: &[u8]) -> Option<PathBuf> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
 }
 
 fn open_in_path_executable(
@@ -941,5 +1053,73 @@ mod tests {
                 ..builtin_vscode.clone()
             }
         )
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn visual_studio_discovery_includes_stable_and_preview_installations() {
+        assert_eq!(
+            VSWHERE_ARGS,
+            [
+                "-latest",
+                "-prerelease",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.CoreEditor",
+                "-find",
+                r"Common7\IDE\devenv.exe",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn visual_studio_discovery_uses_first_non_empty_result() {
+        let executable =
+            parse_visual_studio_executable(b"\r\nC:\\Visual Studio\\Common7\\IDE\\devenv.exe\r\n")
+                .expect("vswhere output contains a devenv path");
+
+        assert_eq!(
+            executable,
+            Path::new(r"C:\Visual Studio\Common7\IDE\devenv.exe")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn visual_studio_opens_file_for_editing() {
+        use std::ffi::OsStr;
+
+        let mut command = Command::new("devenv.exe");
+        CliArgumentSupplier::VisualStudio.open(&mut command, Path::new(r"C:\repo\src\main.rs"));
+
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("/Edit"), OsStr::new(r"C:\repo\src\main.rs")]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn visual_studio_navigates_to_requested_line() {
+        use std::ffi::OsStr;
+
+        let mut command = Command::new("devenv.exe");
+        CliArgumentSupplier::VisualStudio.open_at_line(
+            &mut command,
+            Path::new(r"C:\repo\src\main.rs"),
+            42,
+        );
+
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("/Edit"),
+                OsStr::new(r"C:\repo\src\main.rs"),
+                OsStr::new("/Command"),
+                OsStr::new("Edit.Goto 42"),
+            ]
+        );
     }
 }

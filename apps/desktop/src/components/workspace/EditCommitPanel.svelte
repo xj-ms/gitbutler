@@ -3,14 +3,14 @@
 	import ChangedFilesContextMenu from "$components/shared/ChangedFilesContextMenu.svelte";
 	import ReduxResult from "$components/shared/ReduxResult.svelte";
 	import EditModeFileListItem from "$components/workspace/EditModeFileListItem.svelte";
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import { BACKEND } from "$lib/backend";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { splitMessage } from "$lib/commits/commitMessage";
 	import { hasUnresolvedConflictsOnDisk, refreshConflictStates } from "$lib/files/conflictCheck";
 	import { conflictEntryHint } from "$lib/files/conflictEntryPresence";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { computeChangeStatus } from "$lib/files/fileStatus";
 	import { MODE_SERVICE } from "$lib/mode/modeService";
-	import { vscodePath } from "$lib/project/project";
 	import { PROJECTS_SERVICE } from "$lib/project/projectsService";
 	import { createCommitSelection } from "$lib/selection/key";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
@@ -38,7 +38,7 @@
 	const stackService = inject(STACK_SERVICE);
 	const modeService = inject(MODE_SERVICE);
 	const uiState = inject(UI_STATE);
-	const urlService = inject(URL_SERVICE);
+	const backend = inject(BACKEND);
 	const fileService = inject(FILE_SERVICE);
 
 	const userAvatarUrl = useUserAvatarUrl();
@@ -165,11 +165,13 @@
 
 	async function openAllConflictedFiles(projectPath: string) {
 		for (const file of conflictedFiles) {
-			const path = getEditorUri({
-				schemeId: uiState.global.defaultCodeEditor.current.schemeIdentifer,
-				path: [vscodePath(projectPath), file.path],
+			const opened = await openFileInEditor(backend, {
+				editorId: uiState.global.defaultCodeEditor.current.schemeIdentifer,
+				projectId,
+				projectPath,
+				filePath: file.path,
 			});
-			urlService.openExternalUrl(path);
+			if (!opened) break;
 		}
 	}
 
