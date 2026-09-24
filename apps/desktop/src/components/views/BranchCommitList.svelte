@@ -29,6 +29,7 @@
 		ReorderCommitDzHandler,
 	} from "$lib/dragging/stackingReorderDropzoneManager";
 	import { commitUrl, FORGE_INFO_SERVICE } from "$lib/forge/forgeInfo.svelte";
+	import { branchCanUpdateFromRemote } from "$lib/stacks/stack";
 	import { getStackContext } from "$lib/stacks/stackController.svelte";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 
@@ -83,7 +84,7 @@
 
 	const localAndRemoteCommits = $derived(segment.commits);
 	const upstreamOnlyCommits = $derived(segment.commitsOnRemote);
-	const hasRemoteCommits = $derived(upstreamOnlyCommits.length > 0);
+	const canUpdateFromRemote = $derived(branchCanUpdateFromRemote(segment));
 	const hasCommits = $derived(localAndRemoteCommits.length > 0);
 
 	/**
@@ -286,13 +287,13 @@
 
 <!-- {@render commitReorderDz(stackingReorderDropzoneManager.top(branchName))} -->
 
-{#if hasCommits || hasRemoteCommits}
+{#if hasCommits || canUpdateFromRemote}
 	<div
 		class="commit-list hide-when-empty"
 		class:rounded={roundedTop}
 		use:focusable={{ vertical: true }}
 	>
-		{#if hasRemoteCommits}
+		{#if canUpdateFromRemote}
 			<UpstreamActionRow testId={TestId.UpstreamCommitsCommitAction} isLast={!hasCommits}>
 				{#snippet action()}
 					{#if branchName && branchRef && !inWorktree}
