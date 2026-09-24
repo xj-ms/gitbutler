@@ -855,11 +855,15 @@ mod project_meta {
     }
 
     #[test]
-    fn tag_target_ref_reads_as_none() -> anyhow::Result<()> {
+    fn tag_target_ref_is_read() -> anyhow::Result<()> {
         let config =
             gix::config::File::try_from("[gitbutler \"project\"]\n\ttargetRef = refs/tags/main\n")?;
         let actual = ProjectMeta::try_from_config(&config, &repo()?)?;
-        assert_eq!(actual.target_ref, None, "tags are not integration targets");
+        assert_eq!(
+            actual,
+            local_target("refs/tags/main")?,
+            "tag targets are accepted"
+        );
         Ok(())
     }
 
@@ -983,15 +987,51 @@ mod project_meta {
     }
 
     #[test]
-    fn resolve_local_target_rejects_tag() -> anyhow::Result<()> {
-        let repo = repo()?;
-        let err = but_core::ref_metadata::resolve_local_target("refs/tags/main".try_into()?, &repo)
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("must be a local or remote-tracking branch"),
-            "non-branch refs must fail before tracking lookup: {err}"
+    fn tag_target_push_remote_name() -> anyhow::Result<()> {
+        let mut repo = repo()?;
+        let tag_meta = ProjectMeta {
+            target_ref: Some(LocalRefName::new(
+                gix::refs::FullName::try_from("refs/tags/v1.0.0".to_owned())?,
+            )?),
+            target_commit_id: None,
+            push_remote: None,
+        };
+        assert_eq!(
+            tag_meta.push_remote_name(&repo)?,
+            "origin",
+            "tag targets fall back to the default push remote when one is unambiguous"
         );
+
+        let tag_meta_with_push_remote = ProjectMeta {
+            target_ref: Some(LocalRefName::new(
+                gix::refs::FullName::try_from("refs/tags/v1.0.0".to_owned())?,
+            )?),
+            target_commit_id: None,
+            push_remote: Some("fork".to_owned()),
+        };
+        assert_eq!(tag_meta_with_push_remote.push_remote_name(&repo)?, "fork");
+
+        // Remove `origin` and leave two non-origin remotes (`upstream` is already in `repo()`).
+        let mut config = gix::config::File::try_from(
+            "[remote \"upstream\"]\n\turl = https://example.com/upstream\n\
+             [remote \"fork\"]\n\turl = https://example.com/fork\n",
+        )?;
+        std::mem::swap(&mut *repo.config_snapshot_mut(), &mut config);
+        assert_eq!(
+            tag_meta.push_remote_name(&repo).unwrap_err().to_string(),
+            "failed to determine push remote for tag target 'v1.0.0' (configure one with `but config push-remote <remote>`)",
+            "when multiple non-origin remotes exist and no push remote is configured, tag targets ask for an explicit push remote"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_local_target_accepts_tag() -> anyhow::Result<()> {
+        let repo = repo()?;
+        let name: &gix::refs::FullNameRef = "refs/tags/main".try_into()?;
+        let actual = but_core::ref_metadata::resolve_local_target(name, &repo)?;
+        assert_eq!(actual.as_local_full_name_ref(), name);
+        assert!(actual.is_tag());
         Ok(())
     }
 
@@ -1005,11 +1045,9 @@ mod project_meta {
     }
 
     #[test]
-    fn local_ref_name_rejects_tag() -> anyhow::Result<()> {
-        assert!(
-            LocalRefName::new("refs/tags/main".try_into()?).is_err(),
-            "the type must reject tags"
-        );
+    fn local_ref_name_accepts_tag() -> anyhow::Result<()> {
+        let tag = LocalRefName::new("refs/tags/main".try_into()?)?;
+        assert!(tag.is_tag());
         Ok(())
     }
 

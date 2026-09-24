@@ -18,11 +18,12 @@
 		projectId: string;
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
+		remoteTags?: RemoteBranchInfo[];
 		/** Why the target needs choosing again, if it was set before. */
 		notice?: string;
 	}
 
-	const { projectId, remoteBranches, localBranches, notice }: Props = $props();
+	const { projectId, remoteBranches, localBranches, remoteTags = [], notice }: Props = $props();
 
 	const projectsService = inject(PROJECTS_SERVICE);
 	const baseService = inject(BASE_BRANCH_SERVICE);
@@ -84,6 +85,7 @@
 				projectName={project.title}
 				{remoteBranches}
 				{localBranches}
+				{remoteTags}
 				onBranchSelected={setTarget}
 				onOpenProject={openProject}
 				{notice}

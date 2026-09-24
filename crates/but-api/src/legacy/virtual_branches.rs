@@ -114,14 +114,13 @@ pub fn switch_back_to_workspace_with_perm(
         gitbutler_branch_actions::base::get_base_branch_data(ctx, perm.read_permission())
             .context("Failed to get base branch data")?;
 
-    let branch_name = ctx
+    let target_ref = ctx
         .project_meta()?
         .target_ref_or_err()?
-        .to_string()
-        .parse()
-        .context("Invalid branch name")?;
+        .as_local_full_name_ref()
+        .to_owned();
 
-    gitbutler_branch_actions::set_base_branch(ctx, &branch_name, perm)?;
+    gitbutler_branch_actions::set_base_branch_ref(ctx, &target_ref, perm)?;
 
     Ok(base_branch)
 }
@@ -142,7 +141,6 @@ pub fn get_base_branch_data(
         Err(_) => Ok(None),
     }
 }
-
 #[but_api]
 #[instrument(err(Debug))]
 pub fn update_stack_order(

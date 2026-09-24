@@ -860,13 +860,9 @@ mod error {
     }
 
     #[test]
-    fn tag_rejected() {
-        assert_eq!(
-            LocalRefName::new("refs/tags/main".try_into().unwrap())
-                .unwrap_err()
-                .to_string(),
-            "refs/tags/main is not a local branch"
-        );
+    fn tag_accepted() {
+        let tag = LocalRefName::new("refs/tags/main".try_into().unwrap()).unwrap();
+        assert!(tag.is_tag());
     }
 
     #[test]
@@ -875,7 +871,7 @@ mod error {
             LocalRefName::new("refs/remotes/origin/main".try_into().unwrap())
                 .unwrap_err()
                 .to_string(),
-            "refs/remotes/origin/main is not a local branch"
+            "refs/remotes/origin/main is not a local branch or tag"
         );
     }
 

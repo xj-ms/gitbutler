@@ -388,12 +388,18 @@ parent_ref_name = "refs/heads/B"
 fn restore_snapshot_reverts_the_target() -> anyhow::Result<()> {
     let Test { repo, ctx, .. } = &mut Test::default();
 
-    // A second remote branch to switch to.
+    // A second remote branch and a tag to switch to.
     {
         let gix_repo = repo.open_repo();
         let head_id = gix_repo.head_id()?.detach();
         gix_repo.reference(
             "refs/heads/other",
+            head_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "test",
+        )?;
+        gix_repo.reference(
+            "refs/tags/v1.0.0",
             head_id,
             gix::refs::transaction::PreviousValue::Any,
             "test",
@@ -408,6 +414,14 @@ fn restore_snapshot_reverts_the_target() -> anyhow::Result<()> {
     )?;
 
     let mut changed = ctx.project_meta()?;
+    changed.target_ref = Some("refs/tags/v1.0.0".try_into()?);
+    ctx.set_project_meta(changed)?;
+    let tag_snapshot_id = ctx.create_snapshot(
+        SnapshotDetails::new(OperationKind::OnDemandSnapshot),
+        guard.write_permission(),
+    )?;
+
+    let mut changed = ctx.project_meta()?;
     changed.target_ref = Some(but_core::ref_metadata::LocalRefName::new(
         "refs/heads/other".try_into()?,
     )?);
@@ -416,6 +430,17 @@ fn restore_snapshot_reverts_the_target() -> anyhow::Result<()> {
         ctx.project_meta()?.target_ref.map(|name| name.to_string()),
         Some("refs/heads/other".to_string()),
         "the target change is visible before restoring the snapshot"
+    );
+
+    ctx.restore_snapshot(
+        tag_snapshot_id,
+        RestoreKind::RestoreFromSnapshotViaUndo,
+        guard.write_permission(),
+    )?;
+    assert_eq!(
+        ctx.project_meta()?.target_ref.map(|name| name.to_string()),
+        Some("refs/tags/v1.0.0".to_string()),
+        "restoring a snapshot with a tag target_ref succeeds"
     );
 
     ctx.restore_snapshot(

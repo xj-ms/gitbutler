@@ -10,7 +10,7 @@ use but_core::{
 use but_ctx::Context;
 use but_error::{Code, bail_precondition};
 use gitbutler_project::{FetchResult, Project};
-use gitbutler_reference::{Refname, RemoteRefname};
+use gitbutler_reference::Refname;
 use gitbutler_repo::first_parent_commit_ids_until;
 use serde::Serialize;
 use tracing::instrument;
@@ -51,6 +51,10 @@ pub struct BaseBranch {
     pub conflicted: bool,
     pub target_sha_ahead_of_ref: bool,
     pub short_name: String,
+    /// `true` when the base target is a Git tag (`refs/tags/*`) rather than a
+    /// remote-tracking branch. Tag bases are pinned and don't support push-to-base
+    /// or forge/PR-base integration.
+    pub is_tag: bool,
 }
 #[cfg(feature = "export-schema")]
 but_schemars::register_sdk_type!(BaseBranch);
@@ -155,13 +159,13 @@ fn go_back_to_integration(ctx: &Context, perm: &mut RepoExclusive) -> Result<Bas
 pub(crate) fn set_base_branch(
     ctx: &Context,
     perm: &mut RepoExclusive,
-    target_branch_ref: &RemoteRefname,
+    target_ref_name: &gix::refs::FullName,
 ) -> Result<BaseBranch> {
     let repo = ctx.repo.get()?;
     let workspace_ref_exists = repo.try_find_reference(WORKSPACE_REF_NAME)?.is_some();
-    let target_ref_name: gix::refs::FullName = target_branch_ref.to_string().try_into()?;
     let local_target_ref =
         but_core::ref_metadata::resolve_local_target(target_ref_name.as_ref(), &repo)?;
+    let is_tag = local_target_ref.is_tag();
 
     let (existing_target_ref_matches, existing_target_ref, existing_target_commit_id) =
         if let Ok(mut project_meta) = ctx.project_meta() {
@@ -186,21 +190,18 @@ pub(crate) fn set_base_branch(
             (false, None, None)
         };
 
-    // if target exists, and it is the same as the requested branch, we should go back
+    // if target exists, and it is the same as the requested ref, we should go back
     if existing_target_ref_matches {
         return go_back_to_integration(ctx, perm);
     }
 
-    // lookup a branch by name
-    let mut target_branch = repo
-        .try_find_reference(target_branch_ref.to_string().as_str())?
-        .ok_or(anyhow!("remote branch '{target_branch_ref}' not found"))?;
-
-    let target_branch_head = target_branch
+    // lookup the requested target reference (local branch, remote-tracking branch, or tag)
+    let mut target_reference = repo
+        .try_find_reference(target_ref_name.as_ref())?
+        .ok_or_else(|| anyhow!("reference '{}' not found", target_ref_name.as_bstr()))?;
+    let target_head = target_reference
         .peel_to_commit()
-        .context(format!(
-            "failed to peel branch {target_branch_ref} to commit"
-        ))?
+        .with_context(|| format!("failed to peel '{}' to commit", target_ref_name.as_bstr()))?
         .id;
 
     let mut current_head = repo.head().context("Failed to get HEAD reference")?;
@@ -209,12 +210,72 @@ pub(crate) fn set_base_branch(
         .context("Failed to peel HEAD reference to commit")?
         .id;
 
+    let head_ref_name = current_head.referent_name().map(ToOwned::to_owned);
+    let head_is_workspace = head_ref_name
+        .as_ref()
+        .is_some_and(|name| name.as_ref() == WORKSPACE_REF_NAME);
+    if workspace_ref_exists
+        && !head_is_workspace
+        && existing_target_ref
+            .as_ref()
+            .is_none_or(|existing| existing != &local_target_ref)
+    {
+        bail_precondition!(
+            "cannot change the target while HEAD is outside the GitButler workspace - return to workspace first"
+        );
+    }
+
+    let project_meta_check = ProjectMeta {
+        target_ref: Some(local_target_ref.clone()),
+        target_commit_id: Some(target_head),
+        push_remote: None,
+    };
+    if !is_tag && target_ref_name.category() == Some(gix::refs::Category::RemoteBranch) {
+        project_meta_check.target_remote_url(&repo)?;
+    }
+
+    // Fast-forward re-point: switching to a descendant of the current pinned
+    // base keeps the pinned commit and only moves the target reference. The new commits
+    // then surface as regular upstream ("behind") work that the standard integration
+    // flow rebases, so this succeeds with applied stacks and uncommitted changes.
+    if let Some(current_base) = existing_target_commit_id
+        && head_is_workspace
+        && repo
+            .merge_base(target_head, current_base)
+            .map(|id| id.is_some_and(|id| id.detach() == current_base))
+            .unwrap_or(false)
+    {
+        let mut project_meta = ctx.project_meta()?;
+        project_meta.target_ref = Some(local_target_ref);
+        ctx.set_project_meta(project_meta)?;
+        return get_base_branch_data(ctx, perm.read_permission());
+    }
+
+    // A non-descendant switch re-derives the merge-base from scratch, which invalidates
+    // every applied stack's relationship to the base. Preserve the "clear the workspace
+    // first" restriction for that case; descendant switches and same-ref returns have
+    // already returned above.
+    if existing_target_commit_id.is_some()
+        && ctx
+            .meta()?
+            .workspace(WORKSPACE_REF_NAME.try_into()?)?
+            .stacks
+            .iter()
+            .any(|stack| stack.is_in_workspace())
+    {
+        anyhow::bail!(
+            "cannot switch the base to '{}' because it is not a descendant of the current base \
+             while branches are applied; clear the workspace first",
+            target_ref_name.shorten()
+        );
+    }
+
     // Validate shared history, retaining the existing policy for explicit target changes.
     let merge_base = but_workspace::init::resolve_target_commit(
         &repo,
         current_head_commit,
-        target_branch_head,
-        None,
+        target_head,
+        existing_target_commit_id,
     )?;
 
     let changing_target = existing_target_ref
@@ -231,31 +292,19 @@ pub(crate) fn set_base_branch(
         project_meta.resolve_target_commit(&repo)?
     };
     project_meta.target_commit_id = Some(target_commit_oid);
-    if target_branch_ref.remote().is_some() {
+    if !is_tag && target_ref_name.category() == Some(gix::refs::Category::RemoteBranch) {
         project_meta.target_remote_url(&repo)?;
     }
 
-    // TODO: make sure this is a real branch
-    let head_ref_name = current_head
-        .referent_name()
-        .context("Failed to get HEAD reference name")?;
-    let head_is_workspace = head_ref_name == WORKSPACE_REF_NAME;
-    let branch_matches_target =
-        head_ref_name == project_meta.target_ref_or_err()?.as_local_full_name_ref();
-    let head_name: Refname = head_ref_name
-        .to_string()
-        .parse()
-        .expect("BUG: we have to avoid using these legacy types");
-    if workspace_ref_exists
-        && !head_is_workspace
-        && existing_target_ref
+    let branch_matches_target = !is_tag
+        && head_ref_name
             .as_ref()
-            .is_none_or(|existing| Some(existing) != project_meta.target_ref.as_ref())
-    {
-        bail_precondition!(
-            "cannot change the target while HEAD is outside the GitButler workspace - return to workspace first"
-        );
-    }
+            .is_some_and(|name| name.as_ref() == project_meta.target_ref_or_err().ok().map(|t| t.as_local_full_name_ref()).unwrap_or_else(|| "".try_into().unwrap()));
+    let head_name: Option<Refname> = head_ref_name.as_ref().map(|name| {
+        name.to_string()
+            .parse()
+            .expect("BUG: we have to avoid using these legacy types")
+    });
     let head_has_local_work = !head_is_workspace
         && repo
             .merge_base(current_head_commit, target_commit_oid)
@@ -266,20 +315,24 @@ pub(crate) fn set_base_branch(
     let mut workspace_to_initialize = None;
     if !head_is_workspace {
         // Preserve non-target branches even when the entire visible stack is empty.
-        // The target branch only needs a new stack for commits or uncommitted changes.
+        // The target branch (or a detached HEAD on a tag) only needs a new stack for commits or uncommitted changes.
         let changes = but_core::diff::worktree_changes(&*ctx.repo.get()?)?.changes;
-        if !branch_matches_target || !changes.is_empty() || head_has_local_work {
-            let stack_ref_name = if branch_matches_target {
-                let stack_ref_name = but_core::branch::unique_canned_refname(&repo)?;
-                repo.reference(
-                    stack_ref_name.as_ref(),
-                    current_head_commit,
-                    gix::refs::transaction::PreviousValue::MustNotExist,
-                    "initialize stack",
-                )?;
-                stack_ref_name
-            } else {
-                head_name.to_string().try_into()?
+        let has_non_target_branch = head_name.is_some() && !branch_matches_target;
+        if has_non_target_branch || !changes.is_empty() || head_has_local_work {
+            let (stack_ref_name, created_stack_ref) = match head_name.as_ref() {
+                Some(head_name) if !branch_matches_target => {
+                    (head_name.to_string().try_into()?, false)
+                }
+                _ => {
+                    let stack_ref_name = but_core::branch::unique_canned_refname(&repo)?;
+                    repo.reference(
+                        stack_ref_name.as_ref(),
+                        current_head_commit,
+                        gix::refs::transaction::PreviousValue::MustNotExist,
+                        "initialize stack",
+                    )?;
+                    (stack_ref_name, true)
+                }
             };
 
             let mut meta = ctx.meta()?;
@@ -290,7 +343,7 @@ pub(crate) fn set_base_branch(
                 WorkspaceCommitRelation::Merged,
                 |_| StackId::generate(),
             );
-            if !branch_matches_target {
+            if !branch_matches_target && head_name.is_some() {
                 // Single-branch mode can already have metadata for the visible branches,
                 // but mark them as outside the workspace. Preserve the entire visible stack,
                 // including empty branches and their ordering, when entering the workspace.
@@ -299,7 +352,7 @@ pub(crate) fn set_base_branch(
             }
             meta.set_workspace(&workspace)?;
             drop((workspace, meta));
-            if !branch_matches_target {
+            if !created_stack_ref || head_name.is_none() {
                 repo.reference(
                     WORKSPACE_REF_NAME,
                     current_head_commit,
@@ -419,8 +472,13 @@ pub(crate) fn target_to_base_branch(
     // we assume that only local commits can be conflicted
     let conflicted = recent_commits.iter().any(|commit| commit.conflicted);
 
+    let is_tag = target_ref_name.is_tag();
     let push_remote_url = project_meta.push_remote_url(repo).ok();
-    let remote_url = project_meta.target_remote_url(repo).ok();
+    let remote_url = if is_tag {
+        None
+    } else {
+        project_meta.target_remote_url(repo).ok()
+    };
 
     // Preserve this legacy DTO's upstream-facing branch name when an upstream is configured.
     let branch_name = upstream_name.as_ref().map_or_else(
@@ -432,10 +490,15 @@ pub(crate) fn target_to_base_branch(
             .map(|(remote, _)| remote)
     });
     let push_remote_name = project_meta
-        .push_remote
-        .clone()
+        .try_push_remote_name(repo)
+        .ok()
+        .flatten()
         .or_else(|| remote_name.clone());
-    let short_name = BaseBranch::compute_short_name(&branch_name, remote_name.as_deref());
+    let short_name = if is_tag {
+        branch_name.clone()
+    } else {
+        BaseBranch::compute_short_name(&branch_name, remote_name.as_deref())
+    };
     let base = BaseBranch {
         branch_name,
         remote_name,
@@ -457,6 +520,7 @@ pub(crate) fn target_to_base_branch(
         conflicted,
         target_sha_ahead_of_ref,
         short_name,
+        is_tag,
     };
     Ok(base)
 }
@@ -552,7 +616,7 @@ mod tests {
         let upstream = repo.rev_parse_single("origin/trunk")?.detach();
         let mut ctx = but_ctx::Context::from_repo_for_testing(repo)?;
         let mut guard = ctx.exclusive_worktree_access();
-        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".parse()?)?;
+        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".try_into()?)?;
         assert_eq!(
             ctx.project_meta()?.target_commit_id,
             Some(upstream),
@@ -587,7 +651,7 @@ mod tests {
         let upstream = repo.rev_parse_single("origin/main")?.detach();
         let mut ctx = but_ctx::Context::from_repo_for_testing(repo)?;
         let mut guard = ctx.exclusive_worktree_access();
-        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".parse()?)?;
+        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".try_into()?)?;
         assert_eq!(
             ctx.project_meta()?.target_commit_id,
             Some(upstream),
@@ -618,7 +682,7 @@ mod tests {
         let upstream = repo.rev_parse_single("origin/main")?.detach();
         let mut ctx = but_ctx::Context::from_repo_for_testing(repo)?;
         let mut guard = ctx.exclusive_worktree_access();
-        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".parse()?)?;
+        super::set_base_branch(&ctx, guard.write_permission(), &"refs/heads/main".try_into()?)?;
         assert_eq!(
             ctx.project_meta()?.target_commit_id,
             Some(upstream),
@@ -655,7 +719,7 @@ mod tests {
         super::set_base_branch(
             &ctx,
             guard.write_permission(),
-            &"refs/remotes/origin/trunk".parse()?,
+            &"refs/remotes/origin/trunk".try_into()?,
         )?;
         let meta = ctx.meta()?;
         let workspace = meta.workspace(but_core::WORKSPACE_REF_NAME.try_into()?)?;
