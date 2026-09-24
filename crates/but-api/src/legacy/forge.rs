@@ -108,7 +108,10 @@ pub fn forge_provider(ctx: &Context) -> Result<Option<ForgeName>> {
 #[instrument(err(Debug))]
 pub fn forge_info(ctx: &Context) -> Result<Option<but_forge::ForgeInfo>> {
     let project_meta = ctx.project_meta()?;
-    if project_meta.target_ref.is_none() {
+    let Some(target_ref) = project_meta.target_ref.as_ref() else {
+        return Ok(None);
+    };
+    if target_ref.category() == Some(gix::refs::Category::Tag) {
         return Ok(None);
     }
     let repo = ctx.repo.get()?;

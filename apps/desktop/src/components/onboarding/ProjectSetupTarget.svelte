@@ -30,10 +30,21 @@
 		projectId: string;
 		projectName: string;
 		remoteBranches: RemoteBranchInfo[];
-		onBranchSelected?: (branch: string[]) => void;
+		remoteTags?: RemoteBranchInfo[];
+		loading?: boolean;
+		onBranchSelected?: (branch: string[]) => Promise<void> | void;
 	}
 
-	const { projectId, projectName, remoteBranches, onBranchSelected }: Props = $props();
+	const {
+		projectId,
+		projectName,
+		remoteBranches,
+		remoteTags = [],
+		loading: externalLoading = false,
+		onBranchSelected,
+	}: Props = $props();
+
+	const TAG_PREFIX = "refs/tags/";
 
 	const posthog = inject(POSTHOG_WRAPPER);
 	const gitConfig = inject(GIT_CONFIG_SERVICE);
@@ -44,7 +55,8 @@
 
 	const landDirectly = $derived(projectLandDirectly(projectId));
 
-	let loading = $state<boolean>(false);
+	let internalLoading = $state<boolean>(false);
+	const loading = $derived(externalLoading || internalLoading);
 	let showMoreInfo = $state<boolean>(false);
 
 	// split all the branches by the first '/' and gather the unique remote names
@@ -55,22 +67,37 @@
 		),
 	);
 
+	const targetOptions = $derived([
+		...remoteBranches.map((b) => ({ label: b.name, value: b.name })),
+		...remoteTags.map((t) => ({ label: `${t.name} (tag)`, value: `${TAG_PREFIX}${t.name}` })),
+	]);
+
 	let selectedBranch = $state<RemoteBranchInfo | undefined>(undefined);
-	const defaultBranch = $derived(getBestBranch(remoteBranches.slice()));
+	const defaultBranch = $derived(
+		getBestBranch(remoteBranches.slice()) ??
+			(remoteTags[0] ? { name: `${TAG_PREFIX}${remoteTags[0].name}` } : undefined),
+	);
 	const branch = $derived(selectedBranch ?? defaultBranch);
+	const isTagSelected = $derived(!!branch?.name.startsWith(TAG_PREFIX));
 
 	let selectedRemote = $state<string | undefined>(undefined);
 	const defaultRemote = $derived(
-		(branch && getBranchRemoteFromRef(branch.name)) ?? getBestRemote(remotes),
+		(!isTagSelected && branch && getBranchRemoteFromRef(branch.name)) || getBestRemote(remotes),
 	);
 	const remote = $derived(selectedRemote ?? defaultRemote);
 
 	async function onSetTargetClick() {
-		if (!branch || !remote) return;
-		posthog.captureOnboarding(OnboardingEvent.ProjectSetupContinue, undefined, {
-			landDirectly: $landDirectly,
-		});
-		onBranchSelected?.([branch.name, remote]);
+		if (!branch || loading) return;
+		if (!isTagSelected && !remote) return;
+		internalLoading = true;
+		try {
+			posthog.captureOnboarding(OnboardingEvent.ProjectSetupContinue, undefined, {
+				landDirectly: $landDirectly,
+			});
+			await onBranchSelected?.(isTagSelected ? [branch.name] : [branch.name, remote!]);
+		} finally {
+			internalLoading = false;
+		}
 	}
 
 	const projectsService = inject(PROJECTS_SERVICE);
@@ -94,12 +121,12 @@
 		<div class="project-setup__field-wrap" data-testid={TestId.ProjectSetupPageTargetBranchSelect}>
 			<Select
 				value={branch?.name}
-				options={remoteBranches.map((b) => ({ label: b.name, value: b.name }))}
+				options={targetOptions}
 				wide
 				onselect={(value) => {
 					selectedBranch = { name: value };
 				}}
-				label="Target branch"
+				label="Target branch or tag"
 				searchable
 			>
 				{#snippet itemSnippet({ item, highlighted })}
@@ -111,13 +138,13 @@
 
 			<p class="text-12 text-body project-setup__field-caption">
 				Your main "production" branch, typically <code class="code-string">origin/master</code> or
-				<code class="code-string">upstream/main</code>.
+				<code class="code-string">upstream/main</code>, or a tag to pin the base to a fixed commit.
 				<br />
 				<Link href="https://docs.gitbutler.com/overview#target-branch">Learn more</Link>
 			</p>
 		</div>
 
-		{#if remotes.length > 1}
+		{#if remotes.length > 1 && !isTagSelected}
 			<div class="project-setup__field-wrap">
 				<Select
 					value={remote}
@@ -243,16 +270,17 @@
 	{/if}
 
 	<div class="action-buttons">
-		<Button kind="outline" onclick={deleteProjectAndGoBack}>Cancel</Button>
+		<Button kind="outline" disabled={loading} onclick={deleteProjectAndGoBack}>Cancel</Button>
 		<Button
 			style="pop"
 			{loading}
+			disabled={loading}
 			onclick={onSetTargetClick}
 			icon="chevron-right"
 			testId={TestId.ProjectSetupPageTargetContinueButton}
 			id="set-base-branch"
 		>
-			Let's go
+			{loading ? "Setting up workspace..." : "Let's go"}
 		</Button>
 	</div>
 </div>

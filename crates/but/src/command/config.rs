@@ -1937,9 +1937,30 @@ async fn target_config(
                     .with_context(|| format!("Failed to find push remote '{push_remote}'"))?;
             }
 
-            let target_ref: gix::refs::FullName = format!("refs/remotes/{new_branch}")
-                .try_into()
-                .context("Invalid target branch name")?;
+            let target_ref: gix::refs::FullName = if new_branch.starts_with("refs/remotes/")
+                || new_branch.starts_with("refs/tags/")
+            {
+                new_branch
+                    .as_str()
+                    .try_into()
+                    .context("Invalid target reference name")?
+            } else {
+                let repo = ctx.repo.get()?;
+                let tag_candidate = format!("refs/tags/{new_branch}");
+                if repo.try_find_reference(&tag_candidate)?.is_some()
+                    && repo
+                        .try_find_reference(&format!("refs/remotes/{new_branch}"))?
+                        .is_none()
+                {
+                    tag_candidate
+                        .try_into()
+                        .context("Invalid target tag name")?
+                } else {
+                    format!("refs/remotes/{new_branch}")
+                        .try_into()
+                        .context("Invalid target branch name")?
+                }
+            };
             drop((guard, ws));
             but_api::workspace::set_target_ref_and_init_project(
                 ctx,

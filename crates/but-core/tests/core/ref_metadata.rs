@@ -833,6 +833,23 @@ mod project_meta {
             "nested/remote",
             "configured remotes remain the primary path so remote names containing '/' still work"
         );
+
+        let tag_meta = ProjectMeta {
+            target_ref: Some(gix::refs::FullName::try_from("refs/tags/v1.0.0".to_owned())?),
+            target_commit_id: None,
+            push_remote: None,
+        };
+        assert_eq!(
+            tag_meta.push_remote_name(&repo).unwrap_err().to_string(),
+            "failed to determine push remote for tag target 'v1.0.0' (configure one with `but config push-remote <remote>`)",
+            "when multiple remotes exist and no push remote is configured, tag targets ask for an explicit push remote"
+        );
+        let tag_meta_with_push_remote = ProjectMeta {
+            target_ref: Some(gix::refs::FullName::try_from("refs/tags/v1.0.0".to_owned())?),
+            target_commit_id: None,
+            push_remote: Some("origin".to_owned()),
+        };
+        assert_eq!(tag_meta_with_push_remote.push_remote_name(&repo)?, "origin");
         Ok(())
     }
 

@@ -2078,6 +2078,15 @@ fn symbolic_remote_names_from_tips(
     let target_ref = project_meta.target_ref.as_ref().and_then(|target_ref| {
         extract_remote_name_and_short_name(target_ref.as_ref(), &remote_names)
             .map(|(remote, _short_name)| (1, remote))
+            .or_else(|| {
+                (target_ref.category() == Some(Category::Tag))
+                    .then(|| {
+                        repo.for_find_only()
+                            .remote_default_name(gix::remote::Direction::Push)
+                            .map(|remote| (1, remote.to_str_lossy().into_owned()))
+                    })
+                    .flatten()
+            })
     });
     let push_remote = project_meta
         .push_remote

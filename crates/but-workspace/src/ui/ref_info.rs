@@ -116,8 +116,17 @@ impl Target {
         remote_names: &gix::remote::Names,
         is_current: bool,
     ) -> anyhow::Result<Self> {
+        let remote_tracking_ref = if ref_name.category() == Some(Category::Tag) {
+            RemoteTrackingReference {
+                display_name: ref_name.shorten().to_str_lossy().into_owned(),
+                remote_name: String::new(),
+                full_name_bytes: ref_name.into_inner(),
+            }
+        } else {
+            RemoteTrackingReference::for_ui(ref_name, remote_names)?
+        };
         Ok(Target {
-            remote_tracking_ref: RemoteTrackingReference::for_ui(ref_name, remote_names)?,
+            remote_tracking_ref,
             commits_ahead,
             is_current,
         })

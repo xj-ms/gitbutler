@@ -383,7 +383,7 @@ mod error {
             set_target_ref(&repo, "refs/heads/main", None)
                 .unwrap_err()
                 .to_string(),
-            "target ref 'refs/heads/main' must be a remote tracking branch"
+            "target ref 'refs/heads/main' must be a remote tracking branch or a tag"
         );
     }
 

@@ -43,12 +43,9 @@ pub fn workspace_branch_and_ancestors_push(
         .target_ref_name()
         .context("failed to get target reference name")?
         .to_owned();
-    let push_remote = match project_meta.push_remote.clone() {
-        Some(push_remote) => push_remote,
-        None => extract_remote_name_and_short_name(target_ref_name.as_ref(), &remote_names)
-            .map(|(remote, _)| remote)
-            .context("failed to get target push remote name")?,
-    };
+    let push_remote = project_meta
+        .push_remote_name(repo)
+        .context("failed to get target push remote name")?;
     let target_branch_name =
         target_branch_name_from_ref_name(target_ref_name.as_ref(), &remote_names)?;
     let mut result = PushResult {

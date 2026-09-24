@@ -27,6 +27,18 @@ pub fn git_remote_branches(ctx: &but_ctx::Context) -> Result<Vec<RemoteRefname>>
         .collect()
 }
 
+/// List the fully-qualified names (`refs/tags/<name>`) of all tags in the repository.
+#[but_api(napi)]
+#[instrument(err(Debug))]
+pub fn git_tags(ctx: &but_ctx::Context) -> Result<Vec<String>> {
+    let repo = ctx.repo.get()?;
+    repo.references()?
+        .tags()?
+        .filter_map(Result::ok)
+        .map(|reference| Ok(reference.name().as_bstr().to_string()))
+        .collect()
+}
+
 #[but_api(napi)]
 #[instrument(err(Debug))]
 pub fn git_test_push(

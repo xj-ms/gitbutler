@@ -188,11 +188,19 @@ pub fn switch_back_to_workspace_with_perm(
         gitbutler_branch_actions::base::get_base_branch_data(ctx, perm.read_permission())
             .context("Failed to get base branch data")?;
 
-    let branch_name = format!("refs/remotes/{}", base_branch.branch_name)
-        .parse()
-        .context("Invalid branch name")?;
+    let target_ref: gix::refs::FullName = if base_branch.is_tag {
+        format!("refs/tags/{}", base_branch.branch_name)
+            .as_str()
+            .try_into()
+            .context("Invalid tag name")?
+    } else {
+        format!("refs/remotes/{}", base_branch.branch_name)
+            .as_str()
+            .try_into()
+            .context("Invalid branch name")?
+    };
 
-    gitbutler_branch_actions::set_base_branch(ctx, &branch_name, perm)?;
+    gitbutler_branch_actions::set_base_branch_ref(ctx, &target_ref, perm)?;
 
     Ok(base_branch)
 }
@@ -238,13 +246,25 @@ pub fn set_base_branch_with_perm(
     push_remote: Option<String>,
     perm: &mut RepoExclusive,
 ) -> Result<BaseBranch> {
-    let branch_name = format!("refs/remotes/{branch}")
-        .parse()
-        .context("Invalid branch name")?;
-    let base_branch = gitbutler_branch_actions::set_base_branch(ctx, &branch_name, perm)?;
+    // The caller may send either a plain remote branch name (e.g. `origin/master`)
+    // or a fully-qualified tag reference (`refs/tags/<name>`). Classify accordingly
+    // so a single command serves both branch and tag bases.
+    let target_ref: gix::refs::FullName = if branch.starts_with("refs/tags/") {
+        branch.as_str().try_into().context("Invalid tag name")?
+    } else {
+        format!("refs/remotes/{branch}")
+            .as_str()
+            .try_into()
+            .context("Invalid branch name")?
+    };
+    let is_tag = target_ref.as_bstr().starts_with(b"refs/tags/");
+    let base_branch = gitbutler_branch_actions::set_base_branch_ref(ctx, &target_ref, perm)?;
 
-    // if they also sent a different push remote, set that too
-    if let Some(push_remote) = push_remote {
+    // if they also sent a different push remote, set that too. Tag bases have no push
+    // remote, so the option is ignored for them.
+    if let Some(push_remote) = push_remote
+        && !is_tag
+    {
         {
             let repo = ctx.repo.get()?;
             but_workspace::init::set_push_remote(&repo, push_remote)?;
