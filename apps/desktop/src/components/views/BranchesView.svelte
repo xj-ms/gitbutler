@@ -288,10 +288,13 @@
 													stackId: listing.stack.id,
 												};
 											} else {
+												const preferredRemote = listing.remotes.includes(baseBranch.remoteName)
+													? baseBranch.remoteName
+													: listing.remotes.at(0);
 												selection = {
 													type: "branch",
 													branchName: listing.name,
-													remote: listing.remotes.at(0),
+													remote: preferredRemote,
 												};
 											}
 										}}
