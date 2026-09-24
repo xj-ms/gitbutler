@@ -109,7 +109,10 @@ impl TargetReference {
         ref_name: gix::refs::FullName,
         remote_names: &gix::remote::Names,
     ) -> anyhow::Result<TargetReference> {
-        if ref_name.category() == Some(Category::LocalBranch) {
+        if matches!(
+            ref_name.category(),
+            Some(Category::LocalBranch | Category::Tag)
+        ) {
             let branch = BranchReference::from(ref_name);
             return Ok(TargetReference {
                 full_name_bytes: branch.full_name_bytes,

@@ -22,22 +22,23 @@ pub struct ProjectMeta {
     pub push_remote: Option<String>,
 }
 
-/// A Git reference name thats guaranteed to always be a local branch.
+/// A Git reference name that is guaranteed to be a local branch or tag.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalRefName(gix::refs::FullName);
 
 impl LocalRefName {
     /// Create a new `LocalRefName` from a Git reference name.
     ///
-    /// Returns an error if `reference` is not a local branch.
+    /// Returns an error if `reference` is not a local branch or tag.
     pub fn new(reference: gix::refs::FullName) -> Result<LocalRefName> {
         match reference
             .category()
             .with_context(|| format!("{reference} has no category"))?
         {
-            gix::refs::Category::LocalBranch => Ok(LocalRefName(reference)),
-            gix::refs::Category::Tag
-            | gix::refs::Category::RemoteBranch
+            gix::refs::Category::LocalBranch | gix::refs::Category::Tag => {
+                Ok(LocalRefName(reference))
+            }
+            gix::refs::Category::RemoteBranch
             | gix::refs::Category::Note
             | gix::refs::Category::PseudoRef
             | gix::refs::Category::MainPseudoRef
@@ -46,8 +47,20 @@ impl LocalRefName {
             | gix::refs::Category::LinkedRef { .. }
             | gix::refs::Category::Bisect
             | gix::refs::Category::Rewritten
-            | gix::refs::Category::WorktreePrivate => bail!("{reference} is not a local branch"),
+            | gix::refs::Category::WorktreePrivate => {
+                bail!("{reference} is not a local branch or tag")
+            }
         }
+    }
+
+    /// Return the reference category (`LocalBranch` or `Tag`).
+    pub fn category(&self) -> Option<gix::refs::Category<'_>> {
+        self.0.category()
+    }
+
+    /// Return `true` if this reference is a tag (`refs/tags/*`).
+    pub fn is_tag(&self) -> bool {
+        self.0.category() == Some(gix::refs::Category::Tag)
     }
 
     /// Like [`gix::refs::FullName::shorten`].
@@ -412,6 +425,7 @@ impl ProjectMeta {
     pub fn remote_target_ref(&self, repo: &gix::Repository) -> Result<Option<gix::refs::FullName>> {
         self.target_ref
             .as_ref()
+            .filter(|target_ref| !target_ref.is_tag())
             .and_then(|target_ref| {
                 repo.branch_remote_tracking_ref_name(
                     target_ref.as_local_full_name_ref(),
@@ -428,6 +442,12 @@ impl ProjectMeta {
             return Ok(name);
         }
         let target_ref = self.target_ref_or_err()?;
+        if target_ref.is_tag() {
+            bail!(
+                "failed to determine push remote for tag target '{}' (configure one with `but config push-remote <remote>`)",
+                target_ref.shorten()
+            );
+        }
         bail!("failed to determine remote for branch {target_ref}")
     }
 
@@ -445,6 +465,11 @@ impl ProjectMeta {
         let Some(target_ref) = self.target_ref.as_ref() else {
             return Ok(None);
         };
+        if target_ref.is_tag() {
+            return Ok(repo
+                .remote_default_name(gix::remote::Direction::Push)
+                .map(|default_remote| default_remote.to_str_lossy().into_owned()));
+        }
         let Some(remote) = repo
             .branch_remote(target_ref.shorten(), gix::remote::Direction::Fetch)
             .transpose()?
@@ -520,8 +545,8 @@ impl ProjectMeta {
 
     /// Read project metadata from the given repository-local Git configuration.
     ///
-    /// Malformed target ref names, refs that aren't local or remote-tracking branches, the
-    /// workspace branch, and invalid target commit IDs are ignored with a warning.
+    /// Malformed target ref names, refs that aren't local branches, tags, or remote-tracking
+    /// branches, the workspace branch, and invalid target commit IDs are ignored with a warning.
     ///
     /// Legacy remote targets are resolved to the local branch configured to track them, as
     /// [`find_local_tracking_branch`] picks it, preserving the stored target commit ID. Returns an
@@ -557,7 +582,9 @@ impl ProjectMeta {
                     );
                     None
                 }
-                Some(gix::refs::Category::LocalBranch) => Some(LocalRefName::new(ref_name)?),
+                Some(gix::refs::Category::LocalBranch | gix::refs::Category::Tag) => {
+                    Some(LocalRefName::new(ref_name)?)
+                }
                 Some(gix::refs::Category::RemoteBranch) => {
                     // The target ref used to always be a remote ref but in oct 2026 we changed it
                     // to always be a local ref. Old repos might still have a remote ref configured
@@ -567,7 +594,7 @@ impl ProjectMeta {
                 _ => {
                     tracing::warn!(
                         "ignoring {PROJECT_TARGET_REF}: target ref {ref_name} is \
-                            not a local or remote-tracking branch"
+                            not a local branch, tag, or remote-tracking branch"
                     );
                     None
                 }
@@ -1211,19 +1238,22 @@ pub trait ValueInfo {
     fn is_default(&self) -> bool;
 }
 
-/// Return a local target name directly, or resolve a remote target to its local tracking branch as
-/// [`find_local_tracking_branch`] picks it. Local names need not exist. Remote resolution fails with
-/// [`UnresolvedLegacyTargetRefError`] if no branch or multiple branches match, and fails if upstream
-/// lookup fails. Other reference categories are rejected.
+/// Return a local branch or tag target name directly, or resolve a remote target to its local
+/// tracking branch as [`find_local_tracking_branch`] picks it. Local names need not exist. Remote
+/// resolution fails with [`UnresolvedLegacyTargetRefError`] if no branch or multiple branches
+/// match, and fails if upstream lookup fails. Other reference categories are rejected.
 pub fn resolve_local_target(
     target_ref: &FullNameRef,
     repo: &gix::Repository,
 ) -> Result<LocalRefName> {
-    if target_ref.category() == Some(gix::refs::Category::LocalBranch) {
+    if matches!(
+        target_ref.category(),
+        Some(gix::refs::Category::LocalBranch | gix::refs::Category::Tag)
+    ) {
         return LocalRefName::new(target_ref.to_owned());
     }
     if target_ref.category() != Some(gix::refs::Category::RemoteBranch) {
-        bail!("target ref '{target_ref}' must be a local or remote-tracking branch");
+        bail!("target ref '{target_ref}' must be a local branch, tag, or remote-tracking branch");
     }
     let short_name = target_ref.shorten();
     let (err, reason, track_command, message) = match find_local_tracking_branch(target_ref, repo)?

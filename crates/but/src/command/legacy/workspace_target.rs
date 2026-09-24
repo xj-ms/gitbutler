@@ -184,6 +184,7 @@ mod tests {
             conflicted: false,
             target_sha_ahead_of_ref: false,
             short_name: "main".to_string(),
+            is_tag: false,
         }
     }
 

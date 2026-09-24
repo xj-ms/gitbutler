@@ -33,6 +33,7 @@
 		projectName: string;
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
+		remoteTags?: RemoteBranchInfo[];
 		onBranchSelected: (
 			branch: [branchName: string, pushRemote: string | undefined],
 		) => Promise<void>;
@@ -50,10 +51,13 @@
 		projectName,
 		remoteBranches,
 		localBranches,
+		remoteTags = [],
 		onBranchSelected,
 		onOpenProject,
 		notice,
 	}: Props = $props();
+
+	const TAG_PREFIX = "refs/tags/";
 
 	const posthog = inject(POSTHOG_WRAPPER);
 	const gitConfig = inject(GIT_CONFIG_SERVICE);
@@ -75,14 +79,25 @@
 		),
 	);
 
+	const targetChoices = $derived<LocalTargetBranch[]>([
+		...localBranches,
+		...remoteTags.map((t) => ({
+			name: `${t.name} (tag)`,
+			refName: `${TAG_PREFIX}${t.name}`,
+			isTarget: false,
+		})),
+	]);
+
 	let selectedBranch = $state<LocalTargetBranch | undefined>(undefined);
 	const defaultBranch = $derived(
 		localBranches.find((branch) => branch.isTarget) ??
 			localBranches.find((branch) => branch.name === "main") ??
 			localBranches.find((branch) => branch.name === "master") ??
-			localBranches[0],
+			localBranches[0] ??
+			targetChoices[0],
 	);
 	const branch = $derived(selectedBranch ?? defaultBranch);
+	const isTagSelected = $derived(!!branch?.refName.startsWith(TAG_PREFIX));
 
 	let selectedRemote = $state<string | undefined>(undefined);
 	const defaultRemote = $derived(getBestRemote(remotes));
@@ -99,7 +114,10 @@
 				landDirectly: $landDirectly,
 			});
 			try {
-				await onBranchSelected([branch.refName, replacingTarget ? undefined : remote]);
+				await onBranchSelected([
+					branch.refName,
+					replacingTarget || isTagSelected ? undefined : remote,
+				]);
 				targetWasSet = true;
 			} catch (error) {
 				const classified = classify(error);
@@ -141,13 +159,13 @@
 		<div class="project-setup__field-wrap" data-testid={TestId.ProjectSetupPageTargetBranchSelect}>
 			<Select
 				value={branch?.refName}
-				options={localBranches.map((b) => ({ label: b.name, value: b.refName }))}
+				options={targetChoices.map((b) => ({ label: b.name, value: b.refName }))}
 				disabled={loading || targetWasSet}
 				wide
 				onselect={(value) => {
-					selectedBranch = localBranches.find((branch) => branch.refName === value);
+					selectedBranch = targetChoices.find((branch) => branch.refName === value);
 				}}
-				label="Target branch"
+				label="Target branch or tag"
 				searchable
 			>
 				{#snippet itemSnippet({ item, highlighted })}
@@ -159,13 +177,14 @@
 
 			<p class="text-12 text-body project-setup__field-caption">
 				Your main "production" branch, typically <code class="code-string">master</code> or
-				<code class="code-string">main</code>. Its configured upstream is used for pulling.
+				<code class="code-string">main</code> (whose configured upstream is used for pulling), or a
+				tag to pin the base to a fixed commit.
 				<br />
 				<Link href="https://docs.gitbutler.com/overview#target-branch">Learn more</Link>
 			</p>
 		</div>
 
-		{#if remotes.length > 1 && !replacingTarget}
+		{#if remotes.length > 1 && !replacingTarget && !isTagSelected}
 			<div class="project-setup__field-wrap">
 				<Select
 					value={remote}

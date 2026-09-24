@@ -101,4 +101,8 @@ export default class BaseBranchService {
 	remoteBranches(projectId: string) {
 		return this.backendApi.endpoints.remoteBranches.useQuery({ projectId });
 	}
+
+	remoteTags(projectId: string) {
+		return this.backendApi.endpoints.remoteTags.useQuery({ projectId });
+	}
 }

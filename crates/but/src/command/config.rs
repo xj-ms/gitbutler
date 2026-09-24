@@ -1893,8 +1893,17 @@ async fn target_config(
                     let local_ref: gix::refs::FullName = format!("refs/heads/{new_branch}")
                         .try_into()
                         .context("Invalid target branch name")?;
+                    let tag_ref: gix::refs::FullName = format!("refs/tags/{new_branch}")
+                        .try_into()
+                        .context("Invalid target tag name")?;
                     if repo.try_find_reference(local_ref.as_ref())?.is_some() {
                         local_ref
+                    } else if repo.try_find_reference(tag_ref.as_ref())?.is_some()
+                        && repo
+                            .try_find_reference(&format!("refs/remotes/{new_branch}"))?
+                            .is_none()
+                    {
+                        tag_ref
                     } else {
                         format!("refs/remotes/{new_branch}")
                             .try_into()

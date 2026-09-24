@@ -18,11 +18,14 @@
 		projectId: string;
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
+		remoteTags?: RemoteBranchInfo[];
 		/** Why the target needs choosing again, if it was set before. */
 		notice?: string;
 	}
 
-	const { projectId, remoteBranches, localBranches, notice }: Props = $props();
+	const { projectId, remoteBranches, localBranches, remoteTags = [], notice }: Props = $props();
+
+	const TAG_PREFIX = "refs/tags/";
 
 	const projectsService = inject(PROJECTS_SERVICE);
 	const baseService = inject(BASE_BRANCH_SERVICE);
@@ -36,13 +39,14 @@
 		pushRemote: string | undefined,
 	]) {
 		if (!branchName) return;
+		const isTag = branchName.startsWith(TAG_PREFIX);
 
 		try {
 			// Only set the target; the user keeps working on their current branch.
 			await setBaseBranchTargetRef({
 				projectId,
 				targetRef: branchName,
-				pushRemote,
+				pushRemote: isTag ? undefined : pushRemote,
 			});
 		} catch (e: unknown) {
 			posthog.captureOnboarding(OnboardingEvent.SetTargetBranchFailed, e);
@@ -84,6 +88,7 @@
 				projectName={project.title}
 				{remoteBranches}
 				{localBranches}
+				{remoteTags}
 				onBranchSelected={setTarget}
 				onOpenProject={openProject}
 				{notice}

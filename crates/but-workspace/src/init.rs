@@ -191,7 +191,7 @@ pub fn resolve_target_commit(
 /// upstream's tip in the same way, so a cutoff past it, left by pulls onto a target that tracked
 /// nothing, isn't kept. The local target is always validated against `HEAD` before writing.
 /// `push_remote`, if `Some`, is validated and stored; if `None`, an existing push remote
-/// is kept as is.
+/// is kept as is (or cleared for a tag target).
 ///
 /// A legacy remote target that no local branch or several local branches track is replaced by
 /// `target_ref` as if it was the same target, so its stored cutoff and push remote are kept.
@@ -227,15 +227,22 @@ pub fn set_target_ref_and_init_project(
             "The stored workspace cutoff commit {cutoff} is missing. Fetch or restore the missing history before setting the target."
         );
     }
+    let is_tag = target_ref.is_tag();
     let mut updated =
         but_core::ref_metadata::repair_target_metadata_for_migration(&project_meta, repo);
     updated.target_ref = Some(target_ref.clone());
 
     let target_head = repo
         .try_find_reference(target_ref.as_local_full_name_ref())?
-        .with_context(|| format!("target branch '{target_ref}' not found"))?
+        .with_context(|| {
+            if is_tag {
+                format!("tag '{target_ref}' not found")
+            } else {
+                format!("target branch '{target_ref}' not found")
+            }
+        })?
         .peel_to_commit()
-        .with_context(|| format!("failed to peel branch '{target_ref}' to commit"))?
+        .with_context(|| format!("failed to peel '{target_ref}' to commit"))?
         .id;
 
     let head = repo.head_id().context("Failed to resolve HEAD")?.detach();
@@ -258,15 +265,19 @@ pub fn set_target_ref_and_init_project(
         }
     };
 
-    updated.push_remote = match push_remote {
-        Some(name) => {
-            repo.find_remote(name.as_str())
-                .with_context(|| format!("failed to find remote {name}"))?;
-            Some(name)
+    updated.push_remote = if is_tag {
+        None
+    } else {
+        match push_remote {
+            Some(name) => {
+                repo.find_remote(name.as_str())
+                    .with_context(|| format!("failed to find remote {name}"))?;
+                Some(name)
+            }
+            // Unlike the legacy `set_base_branch()`, keep an existing push remote instead of
+            // clearing it - the target may be (re-)set at any time.
+            None => updated.push_remote,
         }
-        // Unlike the legacy `set_base_branch()`, keep an existing push remote instead of
-        // clearing it - the target may be (re-)set at any time.
-        None => updated.push_remote,
     };
 
     // Before the target is stored, so it's never stored without the upstream it fetches from.
@@ -301,6 +312,9 @@ pub fn upstream_to_track(
     target_ref: &LocalRefName,
     target_head: gix::ObjectId,
 ) -> Result<Option<(BString, gix::refs::FullName, gix::ObjectId)>> {
+    if target_ref.is_tag() {
+        return Ok(None);
+    }
     let name = target_ref.as_local_full_name_ref();
     let fetch = gix::remote::Direction::Fetch;
     // A configured upstream counts even where no refspec maps it, like one on `.`.

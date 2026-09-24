@@ -6,6 +6,8 @@
 
 	const { projectId }: { projectId: string } = $props();
 
+	const TAG_PREFIX = "refs/tags/";
+
 	const stackService = inject(STACK_SERVICE);
 	const baseBranchService = inject(BASE_BRANCH_SERVICE);
 	const baseBranchQuery = $derived(baseBranchService.baseBranch(projectId));
@@ -13,15 +15,23 @@
 	const remoteBranchesQuery = $derived(baseBranchService.remoteBranches(projectId));
 	const localBranchesQuery = $derived(baseBranchService.localTargetBranches(projectId));
 	const localBranches = $derived(localBranchesQuery.response ?? []);
-	const currentTarget = $derived(localBranches.find((branch) => branch.isTarget)?.refName);
+	const remoteTagsQuery = $derived(baseBranchService.remoteTags(projectId));
 	const [setBaseBranchTargetRef, targetRefSwitch] = baseBranchService.setTargetRef;
 
-	let selectedBranch = $derived(currentTarget);
+	const currentTarget = $derived(
+		baseBranch?.isTag
+			? `${TAG_PREFIX}${baseBranch.branchName}`
+			: localBranches.find((branch) => branch.isTarget)?.refName,
+	);
+
+	let selectedTarget = $derived(currentTarget);
 	let selectedRemote = $derived(baseBranch?.pushRemoteName ?? undefined);
+
+	const isTagSelected = $derived(!!selectedTarget?.startsWith(TAG_PREFIX));
 
 	const stacksQuery = $derived(stackService.stacks(projectId));
 	const stackCount = $derived(stacksQuery.response?.length);
-	const targetChangeDisabled = $derived(!!(stackCount && stackCount > 0));
+	const hasActiveStacks = $derived(!!(stackCount && stackCount > 0));
 
 	function uniqueRemotes(remoteBranches: { name: string }[]): { name: string }[] {
 		return Array.from(new Set(remoteBranches.map((b) => b.name.split("/")[0])))
@@ -33,23 +43,29 @@
 
 	const switching = $derived(targetRefSwitch.current.isLoading);
 
-	async function switchTarget(branch: string, pushRemote?: string) {
+	function targetOptions(
+		branches: { name: string; refName: string }[],
+		tags: { name: string }[],
+	) {
+		return [
+			...branches.map((b) => ({ label: b.name, value: b.refName })),
+			...tags.map((t) => ({ label: `${t.name} (tag)`, value: `${TAG_PREFIX}${t.name}` })),
+		];
+	}
+
+	async function switchTarget(targetRef: string, pushRemote?: string) {
 		// Only update the target; the user keeps working on their current branch.
-		await setBaseBranchTargetRef({ projectId, targetRef: branch, pushRemote });
+		await setBaseBranchTargetRef({ projectId, targetRef, pushRemote });
 	}
 
 	async function onSetBaseBranchClick() {
-		if (!selectedBranch) return;
-
-		if (selectedRemote) {
-			await switchTarget(selectedBranch, selectedRemote);
-		} else {
-			await switchTarget(selectedBranch);
-		}
+		if (!selectedTarget) return;
+		const pushRemote = isTagSelected ? undefined : selectedRemote;
+		await switchTarget(selectedTarget, pushRemote);
 	}
 </script>
 
-{#if remoteBranchesQuery.result.isLoading || localBranchesQuery.result.isLoading}
+{#if remoteBranchesQuery.result.isLoading || localBranchesQuery.result.isLoading || remoteTagsQuery.result.isLoading}
 	<InfoMessage filled outlined={false} icon="info">
 		{#snippet content()}
 			Loading branches...
@@ -57,38 +73,39 @@
 	</InfoMessage>
 {:else if remoteBranchesQuery.result.isSuccess && localBranchesQuery.result.isSuccess}
 	{@const remoteBranches = remoteBranchesQuery.response ?? []}
-	{#if localBranches.length > 0}
+	{@const remoteTags = remoteTagsQuery.response ?? []}
+	{#if localBranches.length > 0 || remoteTags.length > 0}
 		{@const remotes = uniqueRemotes(remoteBranches)}
+		{@const options = targetOptions(localBranches, remoteTags)}
 		<CardGroup>
 			<CardGroup.Item>
 				{#snippet title()}
 					Remote configuration
 				{/snippet}
 				{#snippet caption()}
-					Lets you choose where to push code and set the target branch for contributions. The target
-					branch is a local branch like 'master' or 'main'. Its configured upstream is used for
-					pulling. The publication remote is used for pushing feature branches.
+					Lets you choose where to push code and set the target for contributions. The target is a
+					local branch like 'master' or 'main' (whose configured upstream is used for pulling), or a
+					tag, which pins the base to a fixed commit and disables pushing to the base.
 				{/snippet}
 
 				<Select
-					value={selectedBranch}
-					options={localBranches.map((b) => ({ label: b.name, value: b.refName }))}
+					value={selectedTarget}
+					{options}
 					wide
 					onselect={(value) => {
-						selectedBranch = value;
+						selectedTarget = value;
 					}}
-					disabled={targetChangeDisabled}
-					label="Current target branch"
+					label="Current target"
 					searchable
 				>
 					{#snippet itemSnippet({ item, highlighted })}
-						<SelectItem selected={item.value === selectedBranch} {highlighted}>
+						<SelectItem selected={item.value === selectedTarget} {highlighted}>
 							{item.label}
 						</SelectItem>
 					{/snippet}
 				</Select>
 
-				{#if remotes.length > 1}
+				{#if remotes.length > 1 && !isTagSelected}
 					<Select
 						value={selectedRemote}
 						options={remotes.map((r) => ({ label: r.name, value: r.name }))}
@@ -96,7 +113,6 @@
 						onselect={(value) => {
 							selectedRemote = value;
 						}}
-						disabled={targetChangeDisabled}
 						label="Create branches on remote"
 					>
 						{#snippet itemSnippet({ item, highlighted })}
@@ -107,27 +123,27 @@
 					</Select>
 				{/if}
 
-				{#if targetChangeDisabled}
+				{#if hasActiveStacks}
 					<InfoMessage filled outlined={false} icon="info">
 						{#snippet content()}
 							You have {stackCount === 1 ? "1 active branch" : `${stackCount} active branches`} in your
-							workspace. Please clear the workspace before switching the base branch.
+							workspace. You can switch to a target that is a descendant of the current base; other switches
+							require clearing the workspace first.
 						{/snippet}
 					</InfoMessage>
-				{:else}
-					<Button
-						kind="outline"
-						onclick={onSetBaseBranchClick}
-						id="set-base-branch"
-						loading={switching}
-						disabled={!selectedBranch ||
-							(selectedBranch === currentTarget &&
-								selectedRemote === (baseBranch?.pushRemoteName ?? undefined)) ||
-							targetChangeDisabled}
-					>
-						{switching ? "Updating target..." : "Update configuration"}
-					</Button>
 				{/if}
+
+				<Button
+					kind="outline"
+					onclick={onSetBaseBranchClick}
+					id="set-base-branch"
+					loading={switching}
+					disabled={!selectedTarget ||
+						(selectedTarget === currentTarget &&
+							(isTagSelected || selectedRemote === (baseBranch?.pushRemoteName ?? undefined)))}
+				>
+					{switching ? "Updating target..." : "Update configuration"}
+				</Button>
 			</CardGroup.Item>
 		</CardGroup>
 	{/if}
