@@ -9761,7 +9761,7 @@ source = "git+https://github.com/tauri-apps/tao?rev=c704261c519c58cfdd0bc2d58ba2
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.118",
 ]
 
 [[package]]

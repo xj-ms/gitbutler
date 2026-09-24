@@ -248,6 +248,7 @@ fn main() -> anyhow::Result<()> {
                 but_api::branch::tauri_branch_create::branch_create,
                 but_api::branch::tauri_branch_rename::branch_rename,
                 legacy::git::tauri_git_remote_branches::git_remote_branches,
+                legacy::git::tauri_git_tags::git_tags,
                 legacy::git::tauri_delete_all_data::delete_all_data,
                 legacy::git::tauri_git_set_global_config::git_set_global_config,
                 legacy::git::tauri_git_remove_global_config::git_remove_global_config,

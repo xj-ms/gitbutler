@@ -52,7 +52,7 @@ pub struct CommitAmendOutcome<'ws, 'meta, M: RefMetadata> {
 /// this particular function call. The provided `context_lines` MUST align
 /// with the `context_lines` value used to generate the `DiffSpec`s passed
 /// in the `changes` parameter.
-#[tracing::instrument(skip(editor, commit, changes), fields(num_changes = changes.len()))]
+#[tracing::instrument(skip(editor, commit, changes, source), fields(num_changes = changes.len()))]
 pub fn commit_amend<'ws, 'meta, M: RefMetadata>(
     mut editor: Editor<'ws, 'meta, M>,
     commit: impl ToCommitSelector,

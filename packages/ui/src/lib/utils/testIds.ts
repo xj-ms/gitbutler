@@ -168,6 +168,7 @@ export enum TestId {
 	ProjectSettingsModal = "project-settings-modal",
 	GeneralSettingsModal = "general-settings-modal",
 	SyncButton = "sync-button",
+	SwitchBaseBranchButton = "switch-base-branch-button",
 	EditMode = "edit-mode",
 	EditModeSaveAndExitButton = "edit-mode-save-and-exit-button",
 	StacksUnappliedToast = "stacks-unapplied-toast",

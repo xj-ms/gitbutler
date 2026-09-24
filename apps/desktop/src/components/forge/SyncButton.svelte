@@ -1,10 +1,11 @@
 <script lang="ts">
+	import BaseBranchSwitchModal from "$components/forge/BaseBranchSwitchModal.svelte";
 	import { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
 	import { BRANCH_SERVICE } from "$lib/branches/branchService.svelte";
 	import { FORGE_INFO_SERVICE } from "$lib/forge/forgeInfo.svelte";
 	import { LISTING_SERVICE } from "$lib/forge/listingService.svelte";
 	import { inject } from "@gitbutler/core/context";
-	import { Button, TimeAgo, Icon, TestId } from "@gitbutler/ui";
+	import { Button, TimeAgo, TestId } from "@gitbutler/ui";
 
 	interface Props {
 		projectId: string;
@@ -34,73 +35,81 @@
 			: undefined,
 	);
 
+	const isTagBase = $derived(baseBranch.response?.isTag ?? false);
+	const targetLabel = $derived.by(() => {
+		const base = baseBranch.response;
+		if (!base) return undefined;
+		return base.isTag ? base.shortName : `${base.remoteName}/${base.shortName}`;
+	});
+
 	let loading = $state(false);
+	let switchModal = $state<BaseBranchSwitchModal>();
 </script>
 
-<Button
-	testId={TestId.SyncButton}
-	kind="outline"
-	width="auto"
-	tooltip="Last fetch from upstream"
-	{loading}
-	{disabled}
-	icon="refresh"
-	reversedDirection
-	onclick={async (e: MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		loading = true;
-		try {
-			await baseBranchService.fetchFromRemotes(projectId, "modal");
-			await Promise.all([
-				...(canListReviews ? [listingService.refresh(projectId)] : []),
-				fetchStatus.result?.refetch(),
-				baseBranch.result?.refetch(),
-				branchService.refresh(),
-			]);
-		} finally {
-			loading = false;
-		}
-	}}
->
-	<span>
-		{#if loading}
-			Fetching...
-		{:else if lastFetched}
-			<TimeAgo date={lastFetched} addSuffix={true} capitalize={true} />
-		{:else}
-			Refetch
-		{/if}
-	</span>
+<div class="sync-button">
+	{#if baseBranch.response}
+		<Button
+			testId={TestId.SwitchBaseBranchButton}
+			kind="outline"
+			width="auto"
+			tooltip="Switch base branch or tag"
+			icon={isTagBase ? "tag" : "target-branch"}
+			reversedDirection
+			{disabled}
+			onclick={(e: MouseEvent) => {
+				e.preventDefault();
+				e.stopPropagation();
+				switchModal?.show();
+			}}
+		>
+			<span>{targetLabel}</span>
+		</Button>
+	{/if}
 
-	{#snippet custom()}
-		{#if baseBranch.response}
-			<div class="target-branch">
-				<Icon name="target-branch" color="var(--text-2)" />
-				<span class="text-12 text-semibold">
-					{baseBranch.response.remoteName}/{baseBranch.response.shortName}
-				</span>
-			</div>
-		{/if}
-	{/snippet}
-</Button>
+	<Button
+		testId={TestId.SyncButton}
+		kind="outline"
+		width="auto"
+		tooltip="Last fetch from upstream"
+		{loading}
+		{disabled}
+		icon="refresh"
+		reversedDirection
+		onclick={async (e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			loading = true;
+			try {
+				await baseBranchService.fetchFromRemotes(projectId, "modal");
+				await Promise.all([
+					...(canListReviews ? [listingService.refresh(projectId)] : []),
+					fetchStatus.result?.refetch(),
+					baseBranch.result?.refetch(),
+					branchService.refresh(),
+				]);
+			} finally {
+				loading = false;
+			}
+		}}
+	>
+		<span>
+			{#if loading}
+				Fetching...
+			{:else if lastFetched}
+				<TimeAgo date={lastFetched} addSuffix={true} capitalize={true} />
+			{:else}
+				Refetch
+			{/if}
+		</span>
+	</Button>
+</div>
+
+<BaseBranchSwitchModal bind:this={switchModal} {projectId} />
 
 <style lang="postcss">
-	.target-branch {
+	.sync-button {
 		display: inline-flex;
 		align-items: center;
-		padding-right: 2px;
 		gap: 4px;
-		color: var(--text-2);
-
-		&:after {
-			display: inline-block;
-			width: 1px;
-			height: 12px;
-			margin: 0 2px 0 4px;
-			background-color: var(--text-2);
-			content: "";
-			opacity: 0.5;
-		}
 	}
 </style>

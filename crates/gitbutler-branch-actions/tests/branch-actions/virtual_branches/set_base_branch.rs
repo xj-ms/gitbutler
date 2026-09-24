@@ -405,7 +405,7 @@ mod error {
             )
             .unwrap_err()
             .to_string(),
-            "remote branch 'refs/remotes/origin/missing' not found"
+            "reference 'refs/remotes/origin/missing' not found"
         );
     }
 
@@ -690,6 +690,177 @@ mod behind_count {
         assert_eq!(
             base.behind, 3,
             "behind count should match the farthest-behind stack (A, which is 3 commits behind)"
+        );
+    }
+}
+
+mod tags_and_descendant_switch {
+    use super::*;
+
+    fn create_ref(repo: &gix::Repository, name: &str, target: gix::ObjectId) {
+        repo.reference(name, target, PreviousValue::Any, "test ref")
+            .unwrap();
+    }
+
+    /// Create a commit that is a strict child of `parent`, reusing its tree.
+    fn child_commit(repo: &gix::Repository, parent: gix::ObjectId, message: &str) -> gix::ObjectId {
+        let tree_id = repo
+            .find_commit(parent)
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let author = signature_gix(SignaturePurpose::Author);
+        let committer = signature_gix(SignaturePurpose::Committer);
+        commit_without_signature_gix(
+            repo,
+            None,
+            author,
+            committer,
+            message.into(),
+            tree_id,
+            &[parent],
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tag_base_pins_to_tag_commit() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let head_id = repo.open().head_id().unwrap().detach();
+        create_ref(&repo.open(), "refs/tags/v1", head_id);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let base = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v1".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        assert!(base.is_tag);
+        assert_eq!(base.branch_name, "v1");
+        assert_eq!(base.short_name, "v1");
+        assert!(base.remote_name.is_empty());
+
+        let project_meta = ctx.project_meta().unwrap();
+        assert_eq!(
+            project_meta.target_ref.map(|n| n.to_string()),
+            Some("refs/tags/v1".to_string())
+        );
+        assert_eq!(project_meta.target_commit_id, Some(head_id));
+    }
+
+    #[test]
+    fn descendant_switch_with_applied_stack_repoints_target() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let base_commit = repo.open().head_id().unwrap().detach();
+
+        repo.checkout(&"refs/heads/some-feature".parse().unwrap());
+        std::fs::write(repo.path().join("stacked.txt"), "content").unwrap();
+        repo.commit_all("stacked");
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch(
+            ctx,
+            &"refs/remotes/origin/master".parse().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        let initial_stacks = stack_details(ctx);
+        assert_eq!(initial_stacks.len(), 1);
+        let stack_id = initial_stacks[0].0;
+
+        // A tag that is a strict descendant of the current base.
+        let descendant = child_commit(&repo.open(), base_commit, "descendant");
+        create_ref(&repo.open(), "refs/tags/v2", descendant);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v2".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        let project_meta = ctx.project_meta().unwrap();
+        assert_eq!(
+            project_meta.target_ref.map(|n| n.to_string()),
+            Some("refs/tags/v2".to_string()),
+            "the target ref is re-pointed to the descendant tag"
+        );
+        assert_eq!(
+            project_meta.target_commit_id,
+            Some(base_commit),
+            "the pinned base commit is kept; the new commits surface as upstream work"
+        );
+        // The applied stack is preserved across the switch.
+        let stacks = stack_details(ctx);
+        assert_eq!(stacks.len(), 1);
+        assert_eq!(stacks[0].0, stack_id);
+    }
+
+    #[test]
+    fn non_descendant_switch_with_applied_stack_is_blocked() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let base_commit = repo.open().head_id().unwrap().detach();
+
+        repo.checkout(&"refs/heads/some-feature".parse().unwrap());
+        std::fs::write(repo.path().join("stacked.txt"), "content").unwrap();
+        repo.commit_all("stacked");
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch(
+            ctx,
+            &"refs/remotes/origin/master".parse().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        // A tag pointing at an orphan commit that shares no history with the base,
+        // so it is not a descendant and the switch must be rejected.
+        let base_tree = repo
+            .open()
+            .find_commit(base_commit)
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let author = signature_gix(SignaturePurpose::Author);
+        let committer = signature_gix(SignaturePurpose::Committer);
+        let orphan = commit_without_signature_gix(
+            &repo.open(),
+            None,
+            author,
+            committer,
+            "orphan".into(),
+            base_tree,
+            &[],
+            None,
+        )
+        .unwrap();
+        create_ref(&repo.open(), "refs/tags/other", orphan);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let err = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/other".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("not a descendant"),
+            "unexpected error: {err}"
         );
     }
 }

@@ -412,12 +412,17 @@ impl ProjectMeta {
     pub fn try_from_config(config: &gix::config::File) -> anyhow::Result<Self> {
         let target_ref = config.string(PROJECT_TARGET_REF).and_then(|value| {
             match gix::refs::FullName::try_from(value.as_bstr()) {
-                Ok(name) if name.category() == Some(gix::refs::Category::RemoteBranch) => {
+                Ok(name)
+                    if matches!(
+                        name.category(),
+                        Some(gix::refs::Category::RemoteBranch | gix::refs::Category::Tag)
+                    ) =>
+                {
                     Some(name)
                 }
                 Ok(name) => {
                     tracing::warn!(
-                        "ignoring {PROJECT_TARGET_REF}: target ref {name} is not a remote tracking branch"
+                        "ignoring {PROJECT_TARGET_REF}: target ref {name} is not a remote tracking branch or tag"
                     );
                     None
                 }

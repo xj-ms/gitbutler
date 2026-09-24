@@ -46,9 +46,18 @@ pub struct BaseBranch {
     pub conflicted: bool,
     pub target_sha_ahead_of_ref: bool,
     pub short_name: String,
+    /// `true` when the base target is a Git tag (`refs/tags/*`) rather than a
+    /// remote-tracking branch. Tag bases are pinned and don't support push-to-base
+    /// or forge/PR-base integration.
+    pub is_tag: bool,
 }
 #[cfg(feature = "export-schema")]
 but_schemars::register_sdk_type!(BaseBranch);
+
+/// Whether `name` designates a Git tag reference (`refs/tags/*`).
+pub(crate) fn is_tag_ref(name: &gix::refs::FullNameRef) -> bool {
+    name.as_bstr().starts_with(b"refs/tags/")
+}
 
 impl BaseBranch {
     pub fn compute_short_name(branch_name: &str, remote_name: &str) -> String {
@@ -147,47 +156,47 @@ fn go_back_to_integration(ctx: &Context, perm: &mut RepoExclusive) -> Result<Bas
 pub(crate) fn set_base_branch(
     ctx: &Context,
     perm: &mut RepoExclusive,
-    target_branch_ref: &RemoteRefname,
+    target_ref_name: &gix::refs::FullName,
 ) -> Result<BaseBranch> {
     let repo = ctx.repo.get()?;
+    let is_tag = is_tag_ref(target_ref_name.as_ref());
     let workspace_ref_exists = repo.try_find_reference(WORKSPACE_REF_NAME)?.is_some();
 
-    let (existing_target_ref_matches, existing_target_ref) = if let Ok(mut project_meta) =
-        ctx.project_meta()
-    {
-        let repaired_project_meta =
-            but_core::ref_metadata::repair_target_metadata_for_migration(&project_meta, &repo);
-        if repaired_project_meta != project_meta {
-            ctx.set_project_meta(repaired_project_meta.clone())?;
-            project_meta = repaired_project_meta;
-        }
-        let target_ref_matches = project_meta
-            .target_ref
-            .as_ref()
-            .is_some_and(|target_ref| target_branch_ref == target_ref.as_ref());
-        (
-            workspace_ref_exists && project_meta.target_commit_id.is_some() && target_ref_matches,
-            project_meta.target_ref,
-        )
-    } else {
-        (false, None)
-    };
+    let (existing_target_ref_matches, existing_target_ref, existing_target_commit_id) =
+        if let Ok(mut project_meta) = ctx.project_meta() {
+            let repaired_project_meta =
+                but_core::ref_metadata::repair_target_metadata_for_migration(&project_meta, &repo);
+            if repaired_project_meta != project_meta {
+                ctx.set_project_meta(repaired_project_meta.clone())?;
+                project_meta = repaired_project_meta;
+            }
+            let target_ref_matches = project_meta
+                .target_ref
+                .as_ref()
+                .is_some_and(|target_ref| target_ref.as_bstr() == target_ref_name.as_bstr());
+            (
+                workspace_ref_exists
+                    && project_meta.target_commit_id.is_some()
+                    && target_ref_matches,
+                project_meta.target_ref,
+                project_meta.target_commit_id,
+            )
+        } else {
+            (false, None, None)
+        };
 
-    // if target exists, and it is the same as the requested branch, we should go back
+    // if target exists, and it is the same as the requested ref, we should go back
     if existing_target_ref_matches {
         return go_back_to_integration(ctx, perm);
     }
 
-    // lookup a branch by name
-    let mut target_branch = repo
-        .try_find_reference(target_branch_ref.to_string().as_str())?
-        .ok_or(anyhow!("remote branch '{target_branch_ref}' not found"))?;
-
-    let target_branch_head = target_branch
+    // lookup the requested target reference (remote-tracking branch or tag)
+    let mut target_reference = repo
+        .try_find_reference(target_ref_name.as_ref())?
+        .ok_or_else(|| anyhow!("reference '{}' not found", target_ref_name.as_bstr()))?;
+    let target_head = target_reference
         .peel_to_commit()
-        .context(format!(
-            "failed to peel branch {target_branch_ref} to commit"
-        ))?
+        .with_context(|| format!("failed to peel '{}' to commit", target_ref_name.as_bstr()))?
         .id;
 
     let mut current_head = repo.head().context("Failed to get HEAD reference")?;
@@ -195,21 +204,6 @@ pub(crate) fn set_base_branch(
         .peel_to_commit()
         .context("Failed to peel HEAD reference to commit")?
         .id;
-
-    // calculate the commit as the merge-base between HEAD in ctx and this target commit
-    let target_commit_oid = repo
-        .merge_base(current_head_commit, target_branch_head)
-        .map(|id| id.detach())
-        .context(format!(
-            "Failed to calculate merge base between {current_head_commit} and {target_branch_head}"
-        ))?;
-
-    let project_meta = ProjectMeta {
-        target_ref: Some(target_branch_ref.to_string().try_into()?),
-        target_commit_id: Some(target_commit_oid),
-        push_remote: None,
-    };
-    project_meta.remote_url_with_fallback(&repo)?;
 
     // TODO: make sure this is a real branch
     let head_ref_name = current_head
@@ -222,12 +216,75 @@ pub(crate) fn set_base_branch(
         .expect("BUG: we have to avoid using these legacy types");
     if workspace_ref_exists
         && !head_is_workspace
-        && existing_target_ref.is_none_or(|target_ref| target_branch_ref != target_ref.as_ref())
+        && existing_target_ref
+            .as_ref()
+            .is_none_or(|target_ref| target_ref.as_bstr() != target_ref_name.as_bstr())
     {
         bail_precondition!(
             "cannot change the target while HEAD is outside the GitButler workspace - return to workspace first"
         );
     }
+
+    let project_meta_check = ProjectMeta {
+        target_ref: Some(target_ref_name.clone()),
+        target_commit_id: Some(target_head),
+        push_remote: None,
+    };
+    if !is_tag {
+        project_meta_check.remote_url_with_fallback(&repo)?;
+    }
+
+    // Fast-forward re-point: switching to a strict descendant of the current pinned
+    // base keeps the pinned commit and only moves the target reference. The new commits
+    // then surface as regular upstream ("behind") work that the standard integration
+    // flow rebases, so this succeeds with applied stacks and uncommitted changes.
+    if let Some(current_base) = existing_target_commit_id
+        && repo
+            .merge_base(target_head, current_base)
+            .map(|id| id.detach() == current_base)
+            .unwrap_or(false)
+    {
+        let mut project_meta = ctx.project_meta()?;
+        project_meta.target_ref = Some(target_ref_name.clone());
+        if is_tag {
+            project_meta.push_remote = None;
+        }
+        ctx.set_project_meta(project_meta)?;
+        return get_base_branch_data(ctx, perm.read_permission());
+    }
+
+    // A non-descendant switch re-derives the merge-base from scratch, which invalidates
+    // every applied stack's relationship to the base. Preserve the "clear the workspace
+    // first" restriction for that case; descendant switches and same-ref returns have
+    // already returned above.
+    if existing_target_commit_id.is_some()
+        && ctx
+            .meta()?
+            .workspace(WORKSPACE_REF_NAME.try_into()?)?
+            .stacks
+            .iter()
+            .any(|stack| stack.is_in_workspace())
+    {
+        anyhow::bail!(
+            "cannot switch the base to '{}' because it is not a descendant of the current base \
+             while branches are applied; clear the workspace first",
+            target_ref_name.shorten()
+        );
+    }
+
+    // calculate the commit as the merge-base between HEAD in ctx and this target commit
+    let target_commit_oid = repo
+        .merge_base(current_head_commit, target_head)
+        .map(|id| id.detach())
+        .with_context(|| {
+            format!("Failed to calculate merge base between {current_head_commit} and {target_head}")
+        })?;
+
+    let project_meta = ProjectMeta {
+        target_ref: Some(target_ref_name.clone()),
+        target_commit_id: Some(target_commit_oid),
+        push_remote: None,
+    };
     ctx.set_project_meta(project_meta)?;
 
     let mut workspace_to_initialize = None;
@@ -237,11 +294,16 @@ pub(crate) fn set_base_branch(
 
         let changes = but_core::diff::worktree_changes(&*ctx.repo.get()?)?.changes;
         if !changes.is_empty() || current_head_commit != target_commit_oid {
-            let branch_matches_target = if let Refname::Local(head_name) = &head_name {
-                let upstream_name = target_branch_ref.with_branch(head_name.branch());
-                upstream_name.eq(target_branch_ref)
-            } else {
-                false
+            // Tags never designate an upstream tracking branch, so the current head is
+            // always adopted as its own stack.
+            let branch_matches_target = match (&head_name, is_tag) {
+                (Refname::Local(local_head), false) => {
+                    let target_branch_ref: RemoteRefname =
+                        target_ref_name.as_bstr().to_string().parse()?;
+                    let upstream_name = target_branch_ref.with_branch(local_head.branch());
+                    upstream_name.eq(&target_branch_ref)
+                }
+                _ => false,
             };
 
             let stack_ref_name = if branch_matches_target {
@@ -392,21 +454,34 @@ pub(crate) fn target_to_base_branch(
     // we assume that only local commits can be conflicted
     let conflicted = recent_commits.iter().any(|commit| commit.conflicted);
 
-    let push_remote_url = project_meta.push_remote_url(repo)?;
-    let remote_url = project_meta.remote_url_with_fallback(repo)?;
-
+    let is_tag = is_tag_ref(target_ref_name.as_ref());
     let branch_name = target_ref_name.shorten().to_string();
-    let remote_name = target_ref
-        .remote_name(gix::remote::Direction::Push)
-        .context("Failed to get current remote name")?
-        .to_owned()
-        .as_bstr()
-        .to_string();
-    let push_remote_name = project_meta
-        .push_remote
-        .clone()
-        .unwrap_or_else(|| remote_name.clone());
-    let short_name = BaseBranch::compute_short_name(&branch_name, &remote_name);
+
+    // Tags are pinned bases without a remote, push target, or forge integration, so
+    // the remote-derived fields are left empty rather than resolved from a remote.
+    let (remote_url, push_remote_url, remote_name, push_remote_name) = if is_tag {
+        (String::new(), String::new(), String::new(), String::new())
+    } else {
+        let push_remote_url = project_meta.push_remote_url(repo)?;
+        let remote_url = project_meta.remote_url_with_fallback(repo)?;
+        let remote_name = target_ref
+            .remote_name(gix::remote::Direction::Push)
+            .context("Failed to get current remote name")?
+            .to_owned()
+            .as_bstr()
+            .to_string();
+        let push_remote_name = project_meta
+            .push_remote
+            .clone()
+            .unwrap_or_else(|| remote_name.clone());
+        (remote_url, push_remote_url, remote_name, push_remote_name)
+    };
+
+    let short_name = if is_tag {
+        branch_name.clone()
+    } else {
+        BaseBranch::compute_short_name(&branch_name, &remote_name)
+    };
     let base = BaseBranch {
         branch_name,
         remote_name,
@@ -426,6 +501,7 @@ pub(crate) fn target_to_base_branch(
         conflicted,
         target_sha_ahead_of_ref,
         short_name,
+        is_tag,
     };
     Ok(base)
 }

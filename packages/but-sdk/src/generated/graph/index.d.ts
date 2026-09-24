@@ -2002,6 +2002,12 @@ export type BaseBranch = {
   conflicted: boolean;
   targetShaAheadOfRef: boolean;
   shortName: string;
+  /**
+   * `true` when the base target is a Git tag (`refs/tags/*`) rather than a
+   * remote-tracking branch. Tag bases are pinned and don't support push-to-base
+   * or forge/PR-base integration.
+   */
+  isTag: boolean;
 };
 
 export type BitbucketAccountIdentifier = {
