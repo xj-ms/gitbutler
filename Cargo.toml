@@ -227,6 +227,8 @@ git2 = { version = "0.21.0", features = [
     "vendored-openssl",
     "vendored-libgit2",
 ] }
+# Must stay in sync with the version `git2` depends on (enforced by `links = "git2"`).
+libgit2-sys = "0.18.5"
 uuid = { version = "1.23", features = ["v4", "serde"] }
 serde = { version = "1.0", features = ["derive", "std"] }
 serde_json = "1.0.148"
@@ -330,6 +332,8 @@ git2 = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f684350
 # GPUI's Linux event loop, as Zed patches it: each turn runs queued tasks for about 10ms, then
 # lets input and frames through, rather than run them all. Only GPUI uses it.
 calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+# [gix-merge-insert-order: -10]
+libgit2-sys = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f6843504339fe7434ee0732a3e968f3e" }
 
 [workspace.lints.clippy]
 # Note that `all` doesn't include everything, so extra lints should be added here.
