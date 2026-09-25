@@ -4211,6 +4211,7 @@ dependencies = [
  "but-oxidize",
  "git2",
  "gix",
+ "libgit2-sys",
  "tempfile",
 ]
 

@@ -94,14 +94,13 @@ pub fn update_uncommitted_changes_with_tree(
             }
         }
 
-        repo.checkout_index(
+        crate::checkout::checkout_index(
+            repo,
             Some(&mut new_uncommitted_changes),
-            Some(
-                git2::build::CheckoutBuilder::new()
-                    .force()
-                    .remove_untracked(true)
-                    .conflict_style_diff3(true),
-            ),
+            git2::build::CheckoutBuilder::new()
+                .force()
+                .remove_untracked(true)
+                .conflict_style_diff3(true),
         )?;
     } else {
         let gix_repo = ctx.clone_repo_for_merging()?;
