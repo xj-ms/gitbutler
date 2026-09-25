@@ -111,3 +111,20 @@ EOF
 
   git tag conflicted-target $conflict_commit
 )
+
+# A stack whose commits track `dir/a` and `dir/b`, so an uncommitted deletion of `dir/a`
+# makes checkouts delete a file from a directory that stays non-empty.
+git clone repo delete_file_in_locked_directory
+(cd delete_file_in_locked_directory
+  git config user.name "Author"
+  git config user.email "author@example.com"
+  git checkout -b branchy
+  mkdir dir
+  echo a > dir/a
+  echo b > dir/b
+  git add dir && git commit -m "add dir"
+  echo b > file
+  git add file && git commit -m "foobar"
+  git checkout -b gitbutler/workspace
+  git commit --allow-empty -m "GitButler Workspace Commit"
+)

@@ -378,6 +378,63 @@ right
 }
 
 #[test]
+fn saving_deletes_uncommitted_deletions_from_locked_directories() -> Result<()> {
+    let (mut ctx, _tempdir) = command_ctx("delete_file_in_locked_directory")?;
+    let repo = ctx.repo.get()?;
+    let foobar = repo.rev_parse_single(b"HEAD^{/foobar}")?.detach();
+    let dir = repo.workdir().unwrap().join("dir");
+    drop(repo);
+
+    std::fs::remove_file(dir.join("a"))?;
+
+    let mut guard = ctx.exclusive_worktree_access();
+    let stack_id = {
+        let (_repo, ws, _db) = ctx.workspace_and_db_with_perm(guard.read_permission())?;
+        stack_id(&ws)?
+    };
+    enter_edit_mode(&mut ctx, foobar, stack_id, guard.write_permission())?;
+    assert!(
+        dir.join("a").exists(),
+        "edit mode checks out the commit, which tracks `dir/a`"
+    );
+
+    let _lock = lock_directory(&dir)?;
+    save_and_return_to_workspace(&mut ctx, guard.write_permission())?;
+
+    assert!(
+        !dir.join("a").exists(),
+        "the uncommitted deletion of `dir/a` is restored"
+    );
+    assert!(
+        dir.join("b").exists(),
+        "`dir/b` is tracked and remains in the worktree"
+    );
+    assert_edit_mode_cleaned_up(&ctx)?;
+    Ok(())
+}
+
+/// Hold `dir` open without `FILE_SHARE_DELETE`, like a shell or IDE with it as its current
+/// directory would, so that removing the directory fails even though its files can be deleted.
+#[cfg(windows)]
+fn lock_directory(dir: &std::path::Path) -> Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    Ok(std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)?)
+}
+
+/// Directories can't be locked against removal on this platform, so there is nothing to hold.
+#[cfg(not(windows))]
+fn lock_directory(_dir: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+#[test]
 fn abort_requires_force_when_changes_were_made() -> Result<()> {
     let (mut ctx, _tempdir) = command_ctx("conficted_entries_get_written_when_leaving_edit_mode")?;
     let repo = ctx.repo.get()?;
