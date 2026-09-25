@@ -227,6 +227,8 @@ git2 = { version = "0.21.0", features = [
     "vendored-openssl",
     "vendored-libgit2",
 ] }
+# Must stay in sync with the version `git2` depends on (enforced by `links = "git2"`).
+libgit2-sys = "0.18.5"
 uuid = { version = "1.23", features = ["v4", "serde"] }
 serde = { version = "1.0", features = ["derive", "std"] }
 serde_json = "1.0.148"
@@ -330,7 +332,7 @@ gix = { git = "https://github.com/GitoxideLabs/gitoxide", rev = "4dc73c31afa9368
 # lets input and frames through, rather than run them all. Only GPUI uses it.
 calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
 git2 = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f6843504339fe7434ee0732a3e968f3e" }
-# placeholder for libgit2-sys
+libgit2-sys = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f6843504339fe7434ee0732a3e968f3e" }
 # placeholder for tao
 
 [workspace.lints.clippy]
