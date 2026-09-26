@@ -76,6 +76,10 @@
 	// Dependencies work on the main checkout only.
 	const inMainCheckout = $derived(selectionId.worktree === undefined);
 
+	// The whitespace-ignoring view no longer matches backend hunks line-for-line, so hunk actions are disabled.
+	const ignoreWhitespace = $derived(uiState.global.ignoreWhitespace.current);
+	const hunkDraggable = $derived(draggable && !ignoreWhitespace);
+
 	const uncommittedServices = inject(UNCOMMITTED_SERVICE);
 	const uncommittedService = $derived(uncommittedServices.at(selectionId.worktree));
 	const dependencyService = inject(DEPENDENCY_SERVICE);
@@ -221,6 +225,11 @@
 					}}
 				/>
 			{:else}
+				{#if ignoreWhitespace && filteredHunks.length > 0}
+					<p class="text-12 whitespace-notice">
+						Whitespace changes are hidden. Hunk actions are disabled.
+					</p>
+				{/if}
 				{#each filteredHunks.slice(0, renderedHunkCount) as hunk, hunkIndex}
 					{@const selection = uncommittedService.hunkCheckStatus(stackId, change.path, hunk)}
 					{@const [_, lineLocks] = getLineLocks(hunk, fileDependencies?.dependencies ?? [])}
@@ -237,7 +246,7 @@
 								commitId,
 								selectionId,
 							),
-							disabled: !draggable,
+							disabled: !hunkDraggable,
 							chipType: "hunk",
 							dropzoneRegistry,
 							dragStateService,
@@ -245,14 +254,15 @@
 					>
 						<HunkDiff
 							id={hunkId}
-							draggingDisabled={!draggable}
-							hideCheckboxes={!isCommitting}
+							draggingDisabled={!hunkDraggable}
+							hideCheckboxes={!isCommitting || ignoreWhitespace}
 							filePath={change.path}
 							hunkStr={hunk.diff}
 							staged={selection.current.selected}
 							stagedLines={selection.current.lines}
 							{lineLocks}
-							selectable={isUncommittedChange}
+							selectable={isUncommittedChange && !ignoreWhitespace}
+							{ignoreWhitespace}
 							{...uiState.pick(
 								"diffLigatures",
 								"tabSize",
@@ -265,7 +275,7 @@
 							)}
 							onLineClick={(p) => {
 								// Only uncommitted lines can be selected for a commit.
-								if (!isUncommittedChange) return;
+								if (!isUncommittedChange || ignoreWhitespace) return;
 								if (!canBePartiallySelected(diff.subject)) {
 									uncommittedService.checkHunk(stackId || null, change.path, hunk);
 								}
@@ -302,7 +312,7 @@
 								}
 							}}
 							onChangeStage={(selected) => {
-								if (!selectable) return;
+								if (!selectable || ignoreWhitespace) return;
 								if (selected) {
 									uncommittedService.checkHunk(stackId || null, change.path, hunk);
 								} else {
@@ -310,6 +320,7 @@
 								}
 							}}
 							handleLineContextMenu={(params) => {
+								if (ignoreWhitespace) return;
 								contextMenu?.open(params.event || params.target, {
 									hunk,
 									selectedLines: selection.current.lines,
@@ -396,6 +407,9 @@
 		&.top-padding {
 			padding-top: 14px;
 		}
+	}
+	.whitespace-notice {
+		color: var(--text-3);
 	}
 	.hunk-placehoder {
 		border: 1px solid var(--border-3);
