@@ -1,4 +1,5 @@
 <script lang="ts">
+	import IgnoreWhitespaceButton from "$components/diff/IgnoreWhitespaceButton.svelte";
 	import ChangedFilesContextMenu from "$components/shared/ChangedFilesContextMenu.svelte";
 	import { draggableChips } from "$lib/dragging/draggable";
 	import { FileChangeDropData } from "$lib/dragging/draggables";
@@ -120,7 +121,11 @@
 			onContextMenu(e);
 		}}
 		oncloseclick={onCloseClick}
-	/>
+	>
+		{#snippet actions()}
+			<IgnoreWhitespaceButton />
+		{/snippet}
+	</FileViewHeader>
 </div>
 
 <style lang="postcss">

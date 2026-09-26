@@ -12,6 +12,7 @@
 		type DependencyLock,
 		type LineId,
 		type LineLock,
+		ignoreWhitespaceInHunk,
 		parseHunk,
 	} from "$lib/utils/diffParsing";
 	import type { ContextMenuParams } from "$components/hunkDiff/HunkDiffRow.svelte";
@@ -27,6 +28,8 @@
 		diffFontSize?: number;
 		diffLigatures?: boolean;
 		inlineUnifiedDiffs?: boolean;
+		/** Hide whitespace-only changes within the hunk. Display only; line selection should be disabled. */
+		ignoreWhitespace?: boolean;
 		strongContrast?: boolean;
 		colorBlindFriendly?: boolean;
 		staged?: boolean;
@@ -54,6 +57,7 @@
 		strongContrast = false,
 		colorBlindFriendly = false,
 		inlineUnifiedDiffs = false,
+		ignoreWhitespace = false,
 		staged,
 		stagedLines,
 		selectable,
@@ -71,7 +75,12 @@
 
 	let numberHeaderWidth = $state<number>(0);
 
-	const hunk = $derived(parseHunk(hunkStr));
+	const parsedHunk = $derived(parseHunk(hunkStr));
+	const whitespaceView = $derived(
+		ignoreWhitespace ? ignoreWhitespaceInHunk(parsedHunk) : undefined,
+	);
+	const hunk = $derived(whitespaceView?.hunk ?? parsedHunk);
+	const whitespaceOnly = $derived(whitespaceView?.whitespaceOnly ?? false);
 
 	const hunkSummary = $derived(
 		`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
@@ -188,7 +197,13 @@
 				</tr>
 			</thead>
 
-			{#if tableWrapperElem && isVisible}
+			{#if whitespaceOnly}
+				<tbody>
+					<tr>
+						<td class="table__whitespace-only" colspan="10">Whitespace-only changes</td>
+					</tr>
+				</tbody>
+			{:else if tableWrapperElem && isVisible}
 				<HunkDiffBody
 					comment={hunk.comment}
 					{filePath}
@@ -303,6 +318,13 @@
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity 0.15s;
+	}
+
+	.table__whitespace-only {
+		padding: 8px 10px;
+		color: var(--text-3);
+		font-size: 12px;
+		font-family: var(--font-default);
 	}
 
 	.table__title-content {
