@@ -1,4 +1,5 @@
 <script lang="ts">
+	import IgnoreWhitespaceButton from "$components/diff/IgnoreWhitespaceButton.svelte";
 	import UnifiedDiffView from "$components/diff/UnifiedDiffView.svelte";
 	import ChangedFileStats from "$components/files/ChangedFileStats.svelte";
 	import FileTreeList from "$components/files/FileTreeList.svelte";
@@ -226,6 +227,7 @@
 								{/snippet}
 
 								{#snippet actions()}
+									<IgnoreWhitespaceButton />
 									<Button
 										kind="ghost"
 										icon="kebab"
@@ -322,6 +324,7 @@
 									{/snippet}
 
 									{#snippet actions()}
+										<IgnoreWhitespaceButton />
 										<Button
 											kind="ghost"
 											icon="kebab"

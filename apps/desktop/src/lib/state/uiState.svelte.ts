@@ -178,6 +178,8 @@ export type GlobalUiState = {
 	diffFontSize: number;
 	diffLigatures: boolean;
 	inlineUnifiedDiffs: boolean;
+	/** Hide whitespace-only changes within hunks. Hunk operations are disabled while enabled. */
+	ignoreWhitespace: boolean;
 	strongContrast: boolean;
 	colorBlindFriendly: boolean;
 	defaultCodeEditor: CodeEditorSettings;
@@ -254,6 +256,7 @@ export class UiState {
 		diffFontSize: 12,
 		diffLigatures: false,
 		inlineUnifiedDiffs: false,
+		ignoreWhitespace: false,
 		strongContrast: false,
 		colorBlindFriendly: false,
 		defaultCodeEditor: { schemeIdentifer: "vscode", displayName: "VSCode" },
