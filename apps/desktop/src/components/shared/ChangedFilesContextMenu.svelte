@@ -1,5 +1,6 @@
 <!-- This is a V3 replacement for `FileContextMenu.svelte` -->
 <script lang="ts">
+	import OpenWithEditorSubmenu from "$components/shared/OpenWithEditorSubmenu.svelte";
 	import AbsorbPlanModal from "$components/stack/AbsorbPlanModal.svelte";
 	import DiscardChangesModal from "$components/workspace/DiscardChangesModal.svelte";
 	import StashIntoBranchModal from "$components/workspace/StashIntoBranchModal.svelte";
@@ -160,6 +161,27 @@
 			idSelection.removeMany(selectedFiles);
 		});
 	}
+
+	async function openPathsInEditor(pathsToOpen: string[], editorId: string) {
+		menuOpen = false;
+		try {
+			const project = await projectService.fetchProject(projectId);
+			const projectPath = project?.path;
+			if (projectPath) {
+				for (const relativePath of pathsToOpen) {
+					const opened = await openFileInEditor(backend, {
+						editorId,
+						projectId,
+						projectPath,
+						filePath: relativePath,
+					});
+					if (!opened) break;
+				}
+			}
+		} catch (error: unknown) {
+			console.error("Failed to load project before opening editor", error);
+		}
+	}
 </script>
 
 {#if menuOpen && menuItem}
@@ -280,26 +302,14 @@
 						label="Open in {defaultCodeEditor.current.displayName}"
 						icon="open-in-ide"
 						disabled={deletion}
-						onclick={async () => {
-							menuOpen = false;
-							try {
-								const project = await projectService.fetchProject(projectId);
-								const projectPath = project?.path;
-								if (projectPath) {
-									for (const relativePath of pathsToOpen) {
-										const opened = await openFileInEditor(backend, {
-											editorId: defaultCodeEditor.current.schemeIdentifer,
-											projectId,
-											projectPath,
-											filePath: relativePath,
-										});
-										if (!opened) break;
-									}
-								}
-							} catch (error: unknown) {
-								console.error("Failed to load project before opening editor", error);
-							}
-						}}
+						onclick={() =>
+							openPathsInEditor(pathsToOpen, defaultCodeEditor.current.schemeIdentifer)}
+					/>
+					<OpenWithEditorSubmenu
+						platformName={backend.platformName}
+						defaultEditorId={defaultCodeEditor.current.schemeIdentifer}
+						disabled={deletion}
+						onselect={(editorId) => openPathsInEditor(pathsToOpen, editorId)}
 					/>
 				{/if}
 				{#if itemPath}
