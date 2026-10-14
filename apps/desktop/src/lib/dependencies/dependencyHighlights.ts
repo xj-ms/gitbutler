@@ -1,10 +1,20 @@
 const highlightCounts = new WeakMap<Element, number>();
 
-export function highlightDependencyCommitRows(commitIds: string[]): () => void {
+export function highlightDependencyCommitRows(commitIds: string[], filePath?: string): () => void {
 	const highlightedRows = new Set<Element>();
 	for (const commitId of commitIds) {
 		const commitRows = document.querySelectorAll(`[data-commit-id="${commitId}"]`);
-		commitRows.forEach((row) => highlightedRows.add(row));
+		commitRows.forEach((row) => {
+			highlightedRows.add(row);
+			if (filePath !== undefined) {
+				const fileRows = row.closest(".commit-row-wrapper")?.querySelectorAll("[data-file-path]");
+				fileRows?.forEach((fileRow) => {
+					if (fileRow.getAttribute("data-file-path") === filePath) {
+						highlightedRows.add(fileRow);
+					}
+				});
+			}
+		});
 	}
 
 	highlightedRows.forEach((row) => {
