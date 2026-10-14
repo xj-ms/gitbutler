@@ -133,7 +133,7 @@
 	});
 
 	function handleLockHover() {
-		clearLockHighlight = highlightDependencyCommitRows(lockedCommitIds);
+		clearLockHighlight = highlightDependencyCommitRows(lockedCommitIds, change.path);
 	}
 
 	function handleLockUnhover() {
@@ -146,6 +146,7 @@
 
 <div
 	data-testid={TestId.FileListItem}
+	data-file-path={change.path}
 	class="filelistitem-wrapper"
 	data-remove-from-panning
 	bind:this={draggableEl}
