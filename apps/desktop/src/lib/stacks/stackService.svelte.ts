@@ -724,6 +724,10 @@ export class StackService {
 		return this.backendApi.endpoints.reviewApply.mutate;
 	}
 
+	get applyWithConfirmation() {
+		return this.backendApi.endpoints.applyWithConfirmation.mutate;
+	}
+
 	get deleteLocalBranch() {
 		return this.backendApi.endpoints.deleteLocalBranch.mutate;
 	}

@@ -452,6 +452,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             but_post(diff::commit_details_with_line_stats_cmd),
         )
         .route("/branch_diff", but_post(but_api::branch::branch_diff_cmd))
+        .route(
+            "/apply_with_confirmation",
+            but_post(but_api::branch::apply_with_confirmation_cmd),
+        )
         .route("/move_branch", but_post(but_api::branch::move_branch_cmd))
         .route(
             "/set_target_ref_and_init_project",

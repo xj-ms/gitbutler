@@ -189,11 +189,13 @@ pub mod merge {
         pub tip: gix::ObjectId,
         /// The name of the references to be merged, it pointed to `tip`.
         pub ref_name: Option<gix::refs::FullName>,
+        /// Paths that conflict with the successfully merged workspace tree.
+        pub paths: Vec<bstr::BString>,
     }
 
     impl std::fmt::Debug for ConflictingStack {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let ConflictingStack { ref_name, tip } = self;
+            let ConflictingStack { ref_name, tip, .. } = self;
             f.debug_struct("ConflictingStack")
                 .field("tip", tip)
                 .field("ref_name", &MaybeDebug(ref_name))
@@ -347,6 +349,9 @@ pub mod merge {
                         continue;
                     }
                     let this_tree_id = peel_to_tree(commit_id.attach(repo))?;
+                    let is_hero = hero_stack.is_some_and(|hero| {
+                        Some(hero) == ref_name.as_ref().map(|rn| rn.as_ref())
+                    });
                     if let Some((prev_tree_id, prev_sidx)) = previous_tip {
                         let (base_tree_id, base_sidx) = {
                             // This is critical: we enforce using the lowest merge-base by using
@@ -364,9 +369,6 @@ pub mod merge {
                             labels_uninteresting_as_no_conflict_allowed,
                             merge_options.clone(),
                         )?;
-                        let is_hero = hero_stack.is_some_and(|hero| {
-                            Some(hero) == ref_name.as_ref().map(|rn| rn.as_ref())
-                        });
                         if merge.has_unresolved_conflicts(conflict_kind) {
                             if matches!(mode, I::MergeTrial { .. }) {
                                 bail!(
@@ -391,59 +393,11 @@ pub mod merge {
                                 *mode = I::Skip;
                                 continue 'tips_loop;
                             }
-                        } else if is_hero {
-                            // Look back and see if there is any skipped stacks. If so, we now merged the hero branch successfully,
-                            //
-                            // This means that skipping some worked. Now we want to try to re-enable previously disabled ones to learn if they
-                            // were really at fault. Imagine `G1 X X X X X H` with H being hero and G1 being the good ones.
-                            // It's notable how multiple branches of these X can be good, but some in the middle can also be bad - imagine
-                            // one file being wrong in one, and another in another stack, so two stacks are causing conflicts while some
-                            // in between are not causing conflicts.
-                            // With this, we might find that it's actually `G1 X G2 G3 X G4 H`, and we don't unnecessarily unapply unrelated branches.
-                            // However, we only know that the first X is definitely a conflict, and all others we have to test one after another
-                            // by test-merging H right after the X under test.
-
-                            // First, mark the first X as conflict as we know it for sure.
-                            let mut saw_first_certain_conflict = false;
-                            let mut has_merge_trials = false;
-                            for (mode, _) in &mut tips[..tip_idx] {
-                                match mode {
-                                    I::Merge => continue,
-                                    I::MergeTrial { .. } => {
-                                        bail!(
-                                            "BUG: found a merge-trial, even though trial should be concluded by now"
-                                        )
-                                    }
-                                    I::CertainConflict => saw_first_certain_conflict = true,
-                                    I::Skip => {
-                                        if saw_first_certain_conflict {
-                                            *mode = I::MergeTrial {
-                                                hero_sidx: sidx,
-                                                hero_tree_id: this_tree_id,
-                                            };
-                                            has_merge_trials = true;
-                                        } else {
-                                            *mode = I::CertainConflict;
-                                            saw_first_certain_conflict = true;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if has_merge_trials {
-                                if ran_merge_trials_loop_safety {
-                                    bail!(
-                                        "BUG: somehow we managed to try to run merge-trials twice, probably leading to an infinite loop"
-                                    );
-                                }
-                                ran_merge_trials_loop_safety = true;
-                                continue 'retry_loop;
-                            }
-                            // We are past possible trials and proceed as usual, with future conflicting stacks just being dropped.
-                        } else if let I::MergeTrial {
-                            hero_sidx,
-                            hero_tree_id,
-                        } = *mode
+                        } else if !is_hero
+                            && let I::MergeTrial {
+                                hero_sidx,
+                                hero_tree_id,
+                            } = *mode
                         {
                             // This stack merged cleanly, and now we have to merge the hero into that result to see if it works.
                             // This tells us if this is stack merges cleanly or causes a real conflict in conjunction with hero.
@@ -470,11 +424,85 @@ pub mod merge {
                         }
                         prev_base_sidx = Some(base_sidx);
                         merge_tree_id = merge.tree.write()?.detach().into();
+                    } else if let I::MergeTrial {
+                        hero_sidx,
+                        hero_tree_id,
+                    } = *mode
+                    {
+                        let base_tree_id =
+                            compute_merge_base(graph, repo, sidx, hero_sidx)?.0;
+                        let merge = repo.merge_trees(
+                            base_tree_id,
+                            this_tree_id,
+                            hero_tree_id,
+                            labels_uninteresting_as_no_conflict_allowed,
+                            merge_options.clone(),
+                        )?;
+                        let trial_outcome = if merge.has_unresolved_conflicts(conflict_kind) {
+                            I::CertainConflict
+                        } else {
+                            I::Merge
+                        };
+                        *mode = trial_outcome;
+                        if matches!(mode, I::CertainConflict) {
+                            continue 'tips_loop;
+                        }
+                    }
+
+                    if is_hero {
+                        // Look back and see if there is any skipped stacks. If so, we now merged the hero branch successfully,
+                        //
+                        // This means that skipping some worked. Now we want to try to re-enable previously disabled ones to learn if they
+                        // were really at fault. Imagine `G1 X X X X X H` with H being hero and G1 being the good ones.
+                        // It's notable how multiple branches of these X can be good, but some in the middle can also be bad - imagine
+                        // one file being wrong in one, and another in another stack, so two stacks are causing conflicts while some
+                        // in between are not causing conflicts.
+                        // With this, we might find that it's actually `G1 X G2 G3 X G4 H`, and we don't unnecessarily unapply unrelated branches.
+                        // However, we only know that the first X is definitely a conflict, and all others we have to test one after another
+                        // by test-merging H right after the X under test.
+
+                        // First, mark the first X as conflict as we know it for sure.
+                        let mut saw_first_certain_conflict = false;
+                        let mut has_merge_trials = false;
+                        for (mode, _) in &mut tips[..tip_idx] {
+                            match mode {
+                                I::Merge => continue,
+                                I::MergeTrial { .. } => {
+                                    bail!(
+                                        "BUG: found a merge-trial, even though trial should be concluded by now"
+                                    )
+                                }
+                                I::CertainConflict => saw_first_certain_conflict = true,
+                                I::Skip => {
+                                    if saw_first_certain_conflict {
+                                        *mode = I::MergeTrial {
+                                            hero_sidx: sidx,
+                                            hero_tree_id: this_tree_id,
+                                        };
+                                        has_merge_trials = true;
+                                    } else {
+                                        *mode = I::CertainConflict;
+                                        saw_first_certain_conflict = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if has_merge_trials {
+                            if ran_merge_trials_loop_safety {
+                                bail!(
+                                    "BUG: somehow we managed to try to run merge-trials twice, probably leading to an infinite loop"
+                                );
+                            }
+                            ran_merge_trials_loop_safety = true;
+                            continue 'retry_loop;
+                        }
+                        // We are past possible trials and proceed as usual, with future conflicting stacks just being dropped.
                     }
                     previous_tip = Some((this_tree_id, sidx));
                 }
 
-                let (stacks, conflicting_stacks) = tips.iter().fold(
+                let (stacks, mut conflicting_stacks) = tips.iter().fold(
                     (Vec::new(), Vec::new()),
                     |(mut stacks, mut conflicting_stacks),
                      (
@@ -489,6 +517,7 @@ pub mod merge {
                             conflicting_stacks.push(ConflictingStack {
                                 tip: *commit_id,
                                 ref_name: ref_name.clone(),
+                                paths: Vec::new(),
                             });
                         } else {
                             stacks.push(Stack {
@@ -512,6 +541,38 @@ pub mod merge {
                         previous_tip.map(|t| t.0)
                     })
                     .context("having stacks means the loop ran once")?;
+
+                // Diagnose against the final tree, not intermediate merge trials which can
+                // temporarily exclude stacks that turn out to be compatible.
+                for (conflict, (_, tip)) in conflicting_stacks
+                    .iter_mut()
+                    .zip(tips.iter().filter(|(mode, _)| mode.should_skip()))
+                {
+                    let mut base_sidx = tip.segment_idx;
+                    let mut base_tree_id = None;
+                    for (_, retained) in tips.iter().filter(|(mode, _)| !mode.should_skip()) {
+                        let (tree_id, sidx) =
+                            compute_merge_base(graph, repo, base_sidx, retained.segment_idx)?;
+                        base_sidx = sidx;
+                        base_tree_id = Some(tree_id);
+                    }
+                    let merge = repo.merge_trees(
+                        base_tree_id.context("a workspace merge must retain at least one tip")?,
+                        merge_tree_id,
+                        peel_to_tree(tip.commit_id.attach(repo))?,
+                        repo.default_merge_labels(),
+                        repo.tree_merge_options()?.with_fail_on_conflict(None),
+                    )?;
+                    conflict.paths = merge
+                        .conflicts
+                        .iter()
+                        .filter(|conflict| conflict.is_unresolved(conflict_kind))
+                        .flat_map(|conflict| [conflict.ours.location(), conflict.theirs.location()])
+                        .map(ToOwned::to_owned)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                }
 
                 // Finally, create the merge-commit itself.
                 let mut ws_commit =

@@ -115,6 +115,8 @@ pub mod json {
         pub ref_name: crate::json::FullRefName,
         /// The shortened tip branch name, matching CLI display.
         pub short_name: String,
+        /// Repository-relative paths that conflict with the proposed workspace.
+        pub paths: Vec<String>,
     }
     #[cfg(feature = "export-schema")]
     but_schemars::register_sdk_type!(ConflictingStack);
@@ -145,6 +147,11 @@ pub mod json {
                         ConflictingStack {
                             ref_name: stack.ref_name.into(),
                             short_name,
+                            paths: stack
+                                .paths
+                                .into_iter()
+                                .map(|path| path.to_str_lossy().into_owned())
+                                .collect(),
                         }
                     })
                     .collect(),
@@ -828,6 +835,20 @@ pub fn apply_only_with_perm(
     existing_branch: &gix::refs::FullNameRef,
     perm: &mut RepoExclusive,
 ) -> anyhow::Result<but_workspace::branch::apply::Outcome> {
+    apply_with_conflict_policy(
+        ctx,
+        existing_branch,
+        OnWorkspaceMergeConflict::default(),
+        perm,
+    )
+}
+
+fn apply_with_conflict_policy(
+    ctx: &mut but_ctx::Context,
+    existing_branch: &gix::refs::FullNameRef,
+    on_workspace_conflict: OnWorkspaceMergeConflict,
+    perm: &mut RepoExclusive,
+) -> anyhow::Result<but_workspace::branch::apply::Outcome> {
     let mut meta = ctx.meta()?;
     let (repo, mut ws, _db) = ctx.workspace_mut_and_db_with_perm(perm)?;
     let out = but_workspace::branch::apply(
@@ -839,7 +860,7 @@ pub fn apply_only_with_perm(
         //       Showing them off here while leaving defaults.
         but_workspace::branch::apply::Options {
             workspace_merge: WorkspaceMerge::default(),
-            on_workspace_conflict: OnWorkspaceMergeConflict::default(),
+            on_workspace_conflict,
             workspace_reference_naming: WorkspaceReferenceNaming::default(),
             order: None,
             new_stack_id: None,
@@ -849,6 +870,88 @@ pub fn apply_only_with_perm(
 
     if out.status.persisted_mutation() {
         *ws = out.workspace.clone();
+    }
+    Ok(out)
+}
+
+/// Apply a branch, stopping before workspace conflicts unless every affected stack
+/// was explicitly approved for unapplying. Recheck under the same lock before
+/// proceeding so a stale confirmation never unapplies an additional stack.
+#[but_api(napi, json::ApplyOutcome)]
+#[instrument(err(Debug))]
+pub fn apply_with_confirmation(
+    ctx: &mut but_ctx::Context,
+    existing_branch: &gix::refs::FullNameRef,
+    pr_number: Option<usize>,
+    unapply_conflicting_stacks: Vec<String>,
+) -> anyhow::Result<but_workspace::branch::apply::Outcome> {
+    let unapply_conflicting_stacks = unapply_conflicting_stacks
+        .into_iter()
+        .map(gix::refs::FullName::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut guard = ctx.exclusive_worktree_access();
+    apply_with_confirmation_with_perm(
+        ctx,
+        existing_branch,
+        pr_number,
+        &unapply_conflicting_stacks,
+        guard.write_permission(),
+    )
+}
+
+/// Apply with conflict confirmation while reusing caller-held exclusive access.
+/// Only the explicitly approved references may be unapplied.
+pub fn apply_with_confirmation_with_perm(
+    ctx: &mut but_ctx::Context,
+    existing_branch: &gix::refs::FullNameRef,
+    pr_number: Option<usize>,
+    unapply_conflicting_stacks: &[gix::refs::FullName],
+    perm: &mut RepoExclusive,
+) -> anyhow::Result<but_workspace::branch::apply::Outcome> {
+    let snapshot = but_oplog::UnmaterializedOplogSnapshot::from_details_with_perm(
+        ctx,
+        SnapshotDetails::new(OperationKind::CreateBranch)
+            .with_trailers([Trailer::Name(existing_branch.to_string())]),
+        perm.read_permission(),
+        DryRun::No,
+    );
+    let mut out = apply_with_conflict_policy(
+        ctx,
+        existing_branch,
+        OnWorkspaceMergeConflict::AbortAndReportConflictingStacks,
+        perm,
+    )?;
+    // Preserve the original apply behavior when no named stacks would be
+    // unapplied. Only displacing stacks requires the user's confirmation.
+    if out.status == but_workspace::branch::apply::OutcomeStatus::ConflictAborted
+        && out
+            .conflicting_stacks
+            .iter()
+            .all(|stack| unapply_conflicting_stacks.contains(&stack.ref_name))
+    {
+        out = apply_with_conflict_policy(
+            ctx,
+            existing_branch,
+            OnWorkspaceMergeConflict::MaterializeAndReportConflictingStacks,
+            perm,
+        )?;
+    }
+    if out.status.persisted_mutation() {
+        if let Some(pr_number) = pr_number {
+            let applied_branch = out
+                .applied_branches
+                .last()
+                .context("an applied outcome must identify the applied branch")?;
+            let mut meta = ctx.meta()?;
+            let mut branch = meta.branch(applied_branch.as_ref())?;
+            branch.review.pull_request = Some(pr_number);
+            meta.set_branch(&branch)?;
+        }
+        if let Some(snapshot) = snapshot
+            && let Err(err) = snapshot.commit(ctx, perm)
+        {
+            tracing::warn!(?err, "Failed to record branch apply snapshot");
+        }
     }
     Ok(out)
 }
