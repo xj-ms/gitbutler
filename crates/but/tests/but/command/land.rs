@@ -774,3 +774,78 @@ fn status_json(env: &Sandbox) -> serde_json::Value {
         .clone();
     serde_json::from_str(&String::from_utf8_lossy(&stdout)).unwrap()
 }
+
+#[test]
+fn adjacent_line_parallel_branches_commit_pull_and_unapply() -> anyhow::Result<()> {
+    let env = Sandbox::open_with_default_settings("merge-gb-local-two-branches");
+
+    env.but("setup").assert().success();
+
+    let base_content = "\
+private bool Precompute()
+{
+    PerformAsyncOperation();
+    return true;
+}
+";
+    env.but("branch new base-setup").assert().success();
+    env.file("state.txt", base_content);
+    env.but("commit -b base-setup -m 'add state.txt'")
+        .assert()
+        .success();
+    env.but("land base-setup --yes").assert().success();
+
+    // Branch A changes return type to void and removes `return true;`
+    env.but("branch new A").assert().success();
+    let branch_a_content = "\
+private void Precompute()
+{
+    PerformAsyncOperation();
+}
+";
+    env.file("state.txt", branch_a_content);
+    env.but("commit -b A -m 'A: void return'")
+        .assert()
+        .success();
+
+    // Parallel branch B edits the immediately adjacent `PerformAsyncOperation` line
+    env.but("branch new B").assert().success();
+    let combined_content = "\
+private void Precompute()
+{
+    PerformAsyncOperation(\"Preparing graph...\");
+}
+";
+    env.file("state.txt", combined_content);
+    env.but("commit -b B -m 'B: show loading reason'")
+        .assert()
+        .success();
+
+    assert_eq!(
+        env.invoke_git("show A:state.txt"),
+        branch_a_content.trim_end(),
+        "Branch A should only contain the void return change"
+    );
+    assert_eq!(
+        env.invoke_git("show B:state.txt"),
+        "private bool Precompute()\n{\n    PerformAsyncOperation(\"Preparing graph...\");\n    return true;\n}",
+        "Branch B should only contain the adjacent loading-reason change"
+    );
+
+    // Advance upstream `main` and verify `but pull --check` and `but pull` succeed
+    let main_commit = env.invoke_git("rev-parse main");
+    let main_tree = env.invoke_git("rev-parse main^{tree}");
+    let new_main = env.invoke_git(&format!(
+        "commit-tree {main_tree} -p {main_commit} -m 'upstream advance'"
+    ));
+    env.invoke_git(&format!("update-ref refs/heads/main {new_main}"));
+
+    env.but("pull --check").assert().success().stderr_eq(str![]);
+
+    env.but("pull").assert().success().stderr_eq(str![]);
+
+    // Verify unapplying one of the parallel branches cleanly rebuilds the workspace merge commit
+    env.but("unapply A").assert().success().stderr_eq(str![]);
+
+    Ok(())
+}
