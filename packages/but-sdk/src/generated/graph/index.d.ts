@@ -141,6 +141,13 @@ export declare function apply(projectId: string, existingBranch: string): Promis
 export declare function applyBranchIntegration(projectId: string, branch: string, integration: InteractiveIntegration, dryRun: boolean): Promise<IntegrateBranchResult>
 
 /**
+ * Apply a branch, stopping before workspace conflicts unless every affected stack
+ * was explicitly approved for unapplying. Recheck under the same lock before
+ * proceeding so a stale confirmation never unapplies an additional stack.
+ */
+export declare function applyWithConfirmation(projectId: string, existingBranch: string, prNumber: number | null, unapplyConflictingStacks: Array<string>): Promise<ApplyOutcome>
+
+/**
  * Persists `assignments` for the current workspace and records an oplog
  * snapshot on success.
  *
@@ -2598,6 +2605,8 @@ export type ConflictingStack = {
   refName: FullRefName;
   /** The shortened tip branch name, matching CLI display. */
   shortName: string;
+  /** Repository-relative paths that conflict with the proposed workspace. */
+  paths: Array<string>;
 };
 
 /** A linear run of detailed graph rows. */

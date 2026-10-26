@@ -242,6 +242,7 @@ fn main() -> anyhow::Result<()> {
                 workspace::tauri_set_target_ref_and_init_project::set_target_ref_and_init_project,
                 workspace::tauri_resolve_worktree_conflicts::resolve_worktree_conflicts,
                 but_api::branch::tauri_branch_diff::branch_diff,
+                but_api::branch::tauri_apply_with_confirmation::apply_with_confirmation,
                 but_api::branch::tauri_move_branch::move_branch,
                 but_api::branch::tauri_tear_off_branch::tear_off_branch,
                 but_api::branch::tauri_branch_remove::branch_remove,

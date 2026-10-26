@@ -898,6 +898,31 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				invalidatesList(ReduxTag.PullRequests),
 			],
 		}),
+		applyWithConfirmation: build.mutation<
+			ApplyOutcome,
+			{
+				projectId: string;
+				existingBranch: string;
+				prNumber?: number;
+				unapplyConflictingStacks: string[];
+			}
+		>({
+			extraOptions: {
+				command: "apply_with_confirmation",
+				actionName: "Apply Branch",
+			},
+			query: (args) => args,
+			invalidatesTags: (result) =>
+				result?.status === "applied"
+					? [
+							invalidatesList(ReduxTag.HeadSha),
+							invalidatesList(ReduxTag.BranchListing),
+							invalidatesList(ReduxTag.Stacks),
+							invalidatesList(ReduxTag.StackDetails),
+							invalidatesList(ReduxTag.WorktreeChanges),
+						]
+					: [],
+		}),
 		deleteLocalBranch: build.mutation<
 			void,
 			{ projectId: string; refname: string; givenName: string }

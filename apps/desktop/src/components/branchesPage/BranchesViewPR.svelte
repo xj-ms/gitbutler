@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
+	import ApplyBranch from "$components/branchesPage/ApplyBranch.svelte";
 	import PRListCard from "$components/branchesPage/PRListCard.svelte";
 	import ReduxResult from "$components/shared/ReduxResult.svelte";
+	import { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
 	import { FORGE_INFO_SERVICE } from "$lib/forge/forgeInfo.svelte";
 	import { PR_SERVICE } from "$lib/forge/prService.svelte";
+	import { REMOTES_SERVICE } from "$lib/git/remotesService";
+	import { showWarning } from "$lib/notifications/toasts";
 	import { workspacePath } from "$lib/routes/routes.svelte";
-	import { handleApplyOutcome } from "$lib/stacks/stack";
-	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 
 	import { inject } from "@gitbutler/core/context";
+	import { Button, Modal, TestId, Textbox } from "@gitbutler/ui";
+	import type { PullRequest } from "$lib/forge/interface/types";
 
 	type Props = {
 		projectId: string;
@@ -22,20 +26,68 @@
 	const forgeInfoService = inject(FORGE_INFO_SERVICE);
 	const forgeInfoQuery = $derived(forgeInfoService.get(projectId));
 	const forgeInfo = $derived(forgeInfoQuery.response);
+	const reviewUnitName = $derived(forgeInfo?.unit.name ?? "Pull request");
 	const prQuery = $derived(prService.get(projectId, prNumber, { forceRefetch: true }));
 	const prUnit = $derived(forgeInfo?.unit);
 
-	const stackService = inject(STACK_SERVICE);
+	const baseBranchService = inject(BASE_BRANCH_SERVICE);
+	const baseRepoQuery = $derived(baseBranchService.repo(projectId));
+	const baseRepo = $derived(baseRepoQuery.response);
 
-	export async function applyPr() {
-		const outcome = await stackService.reviewApply({
-			projectId,
-			reviewId: prNumber,
-		});
-		handleApplyOutcome(outcome);
-		goto(workspacePath(projectId));
+	const remotesService = inject(REMOTES_SERVICE);
+	let applyBranch = $state<ApplyBranch>();
+
+	let createRemoteModal = $state<Modal>();
+	let inputRemoteName = $state<string>();
+	let loading = $state(false);
+
+	function getRemoteUrl(pr: PullRequest) {
+		if (!baseRepo) return;
+
+		if (baseRepo.protocol?.startsWith("http")) {
+			return pr.repositoryHttpsUrl;
+		} else {
+			return pr.repositorySshUrl;
+		}
+	}
+
+	async function handleConfirmRemote(pr: PullRequest) {
+		const remoteUrl = getRemoteUrl(pr);
+
+		if (!remoteUrl) {
+			throw new Error(`Remote url not available for pr #${prNumber}.`);
+		}
+
+		if (!inputRemoteName) {
+			showWarning("Cannot create a remote", "Please provide a remote name.");
+			return;
+		}
+
+		loading = true;
+		try {
+			const remoteRef = "refs/remotes/" + inputRemoteName + "/" + pr.sourceBranch;
+			await remotesService.addRemote(projectId, inputRemoteName, remoteUrl);
+			await baseBranchService.fetchFromRemotes(projectId);
+			await createRemoteModal?.close();
+			await applyBranch?.apply(remoteRef, prNumber);
+		} finally {
+			loading = false;
+		}
+	}
+
+	export function applyPr() {
+		createRemoteModal?.show();
 	}
 </script>
+
+<ApplyBranch
+	bind:this={applyBranch}
+	{projectId}
+	onApplied={async () => {
+		await baseBranchService.refreshBaseBranch(projectId);
+		await goto(workspacePath(projectId));
+	}}
+/>
 
 <ReduxResult result={prQuery.result} {projectId} {onerror}>
 	{#snippet children(pr)}
@@ -52,6 +104,32 @@
 				noRemote
 			/>
 		</div>
+
+		<Modal
+			testId={TestId.BranchesView_CreateRemoteModal}
+			title="Apply {reviewUnitName}"
+			width="small"
+			bind:this={createRemoteModal}
+			onSubmit={async () => await handleConfirmRemote(pr)}
+		>
+			<p class="fork-notice">
+				To apply a branch from a fork, GitButler must first add the fork as a remote. <span
+					class="text-bold">Choose a remote name:</span
+				>
+			</p>
+			<Textbox bind:value={inputRemoteName} placeholder="remote-name-example" required />
+
+			{#snippet controls(close)}
+				<Button kind="outline" onclick={close}>Cancel</Button>
+				<Button
+					testId={TestId.BranchesView_CreateRemoteModalActionButton}
+					style="pop"
+					type="submit"
+					{loading}
+					disabled={!inputRemoteName}>Confirm and apply</Button
+				>
+			{/snippet}
+		</Modal>
 	{/snippet}
 </ReduxResult>
 
@@ -63,5 +141,8 @@
 		border: 1px solid var(--border-2);
 		border-radius: var(--radius-m);
 		pointer-events: none;
+	}
+	.fork-notice {
+		margin-bottom: 14px;
 	}
 </style>

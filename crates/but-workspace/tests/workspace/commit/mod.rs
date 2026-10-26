@@ -23,6 +23,83 @@ mod from_new_merge_with_metadata {
     };
 
     #[test]
+    fn conflicting_paths_are_reported_per_stack_after_merge_trials() -> anyhow::Result<()> {
+        let (repo, mut meta, mut db) =
+            named_read_only_in_memory_scenario("various-heads-for-multi-line-merge-conflict", "")?;
+        let stacks = [
+            "clean-A",
+            "conflict-F1",
+            "clean-B",
+            "conflict-F2",
+            "clean-C",
+            "conflict-hero",
+        ];
+        add_stacks(&mut meta, stacks);
+        let graph = but_graph::Graph::from_head(
+            &repo,
+            &*meta,
+            but_core::ref_metadata::ProjectMeta::default(),
+            &mut db,
+            Options::limited(),
+        )?;
+        let out = WorkspaceCommit::from_new_merge_with_metadata(
+            &to_stacks(stacks),
+            None,
+            &graph,
+            &repo,
+            Some("refs/heads/conflict-hero".try_into()?),
+        )?;
+        let conflicts: Vec<_> = out
+            .conflicting_stacks
+            .iter()
+            .map(|stack| {
+                (
+                    stack
+                        .ref_name
+                        .as_ref()
+                        .expect("fixture stacks are named")
+                        .shorten()
+                        .to_string(),
+                    stack
+                        .paths
+                        .iter()
+                        .map(|path| path.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            conflicts,
+            [
+                ("conflict-F1".into(), vec!["F1".into()]),
+                ("conflict-F2".into(), vec!["F2".into()]),
+            ],
+            "merge trials must not attribute another stack's conflicting files to this stack"
+        );
+        snapbox::assert_data_eq!(
+            visualize_tree(
+                out.workspace_commit_id
+                    .attach(&repo)
+                    .object()?
+                    .peel_to_tree()?
+                    .id()
+            )
+            .to_string(),
+            snapbox::str![[r#"
+45db176
+├── A:100644:f70f10e "A\n"
+├── B:100644:223b783 "B\n"
+├── C:100644:3cc58df "C\n"
+├── F1:100644:2fc7694 "conflicting-F1\n"
+└── F2:100644:ade95f4 "conflicting-F2\n"
+
+"#]]
+            .raw()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn without_conflict_journey() -> anyhow::Result<()> {
         let (repo, mut meta, mut db) =
             named_read_only_in_memory_scenario("various-heads-for-clean-merge", "")?;

@@ -38,6 +38,8 @@ pub struct ConflictingStack {
     /// The tip branch name of the stack.
     /// Currently we require it to be named.
     pub ref_name: gix::refs::FullName,
+    /// Paths that conflict with the proposed workspace.
+    pub paths: Vec<bstr::BString>,
 }
 
 impl std::fmt::Debug for ConflictingStack {
@@ -807,8 +809,8 @@ fn correlate_conflicting_stacks(
 ) -> Vec<ConflictingStack> {
     conflicts
         .iter()
-        .filter_map(|cs| cs.ref_name.as_ref())
-        .filter_map(|conflicting_ref_name| {
+        .filter_map(|cs| {
+            let conflicting_ref_name = cs.ref_name.as_ref()?;
             let stack = ws_md.find_stack_with_branch(
                 conflicting_ref_name.as_ref(),
                 StackKind::AppliedAndUnapplied,
@@ -816,6 +818,7 @@ fn correlate_conflicting_stacks(
             Some(ConflictingStack {
                 id: stack.id,
                 ref_name: conflicting_ref_name.to_owned(),
+                paths: cs.paths.clone(),
             })
         })
         .collect()
