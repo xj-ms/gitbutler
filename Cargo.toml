@@ -320,6 +320,10 @@ libgit2-sys = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3
 # Include the Windows input-lock deadlock fix from tauri-apps/tao#1215.
 tao = { git = "https://github.com/tauri-apps/tao", rev = "c704261c519c58cfdd0bc2d58ba24e06a0b71c92" }
 
+[patch."https://github.com/GitoxideLabs/gitoxide"]
+# Allow adjacent non-overlapping line changes across parallel virtual branches to merge cleanly.
+gix-merge = { git = "https://github.com/xj-ms/gitoxide", rev = "1cd6612c36e29d74884f718cd3beb54790ece0af" }
+
 [workspace.lints.clippy]
 # Note that `all` doesn't include everything, so extra lints should be added here.
 # You can try `pedantic = deny` to see those extra lints (alongside `all`).

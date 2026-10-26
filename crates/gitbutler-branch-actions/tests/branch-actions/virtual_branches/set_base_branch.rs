@@ -858,9 +858,6 @@ mod tags_and_descendant_switch {
         )
         .unwrap_err()
         .to_string();
-        assert!(
-            err.contains("not a descendant"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains("not a descendant"), "unexpected error: {err}");
     }
 }

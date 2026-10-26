@@ -4644,7 +4644,7 @@ dependencies = [
 [[package]]
 name = "gix-merge"
 version = "0.20.1"
-source = "git+https://github.com/GitoxideLabs/gitoxide?rev=dda600d7ee29a6bda4cf1047d0d1782e76b16f98#dda600d7ee29a6bda4cf1047d0d1782e76b16f98"
+source = "git+https://github.com/xj-ms/gitoxide?rev=1cd6612c36e29d74884f718cd3beb54790ece0af#1cd6612c36e29d74884f718cd3beb54790ece0af"
 dependencies = [
  "bstr",
  "gix-command",
