@@ -333,6 +333,10 @@ git2 = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f684350
 # placeholder for libgit2-sys
 # placeholder for tao
 
+[patch."https://github.com/GitoxideLabs/gitoxide"]
+# Allow adjacent non-overlapping line changes across parallel virtual branches to merge cleanly.
+gix-merge = { git = "https://github.com/xj-ms/gitoxide", rev = "6e2f60de76bca3eea9c1a2373c4dab1b54461331" }
+
 [workspace.lints.clippy]
 # Note that `all` doesn't include everything, so extra lints should be added here.
 # You can try `pedantic = deny` to see those extra lints (alongside `all`).
