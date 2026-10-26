@@ -55,6 +55,14 @@ impl PathRanges {
                     break;
                 }
             }
+            let insert_order = if change_type == TreeStatusKind::Modification
+                && incoming_hunk.old_lines == 0
+                && incoming_hunk.new_lines > 0
+            {
+                Some(incoming_hunk.insert_order.unwrap_or(0))
+            } else {
+                None
+            };
             self.hunk_ranges.push(HunkRange {
                 change_type,
                 target,
@@ -62,6 +70,7 @@ impl PathRanges {
                 start: incoming_hunk.new_start,
                 lines: incoming_hunk.new_lines,
                 line_shift: incoming_hunk_line_shift,
+                insert_order,
             });
             line_shift += incoming_hunk.net_lines()?;
         }

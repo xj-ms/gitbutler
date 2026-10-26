@@ -39,7 +39,7 @@
 		"prettier": "prettier --check .",
 		"format": "prettier --write .",
 		"fix": "eslint --fix .",
-		"prepare": "pnpm --filter @gitbutler/desktop run prepare",
+		"prepare": "node ./scripts/prepare-submodules.mjs && pnpm --filter @gitbutler/desktop run prepare",
 		"rustfmt": "cargo +nightly fmt -- --config-path rustfmt-nightly.toml",
 		"rustdoc": "cargo +nightly doc -Zrustdoc-mergeable-info --open",
 		"isgood": "pnpm check && pnpm lint",

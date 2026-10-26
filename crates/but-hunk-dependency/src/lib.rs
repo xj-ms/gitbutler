@@ -203,7 +203,10 @@ pub fn tree_changes_to_input_files(
         let change_type = change.status.kind();
         files.push(InputFile {
             path: change.path,
-            hunks: hunks.iter().map(InputDiffHunk::from_unified_diff).collect(),
+            hunks: hunks
+                .iter()
+                .flat_map(InputDiffHunk::split_from_unified_diff)
+                .collect(),
             change_type,
         })
     }

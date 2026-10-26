@@ -1,0 +1,5 @@
+[submodule "vendor/gitoxide"]
+	path = vendor/gitoxide
+	url = https://github.com/xj-ms/gitoxide.git
+	branch = gitbutler-0.23.3
+	ignore = dirty

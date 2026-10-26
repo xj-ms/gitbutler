@@ -132,6 +132,7 @@ members = [
     # To be removed and ported.
     "crates/gitbutler-*",
 ]
+exclude = ["vendor/gitoxide/gix-merge"]
 resolver = "2"
 
 [workspace.package]
@@ -330,6 +331,11 @@ git2 = { git = "https://github.com/gitbutlerapp/git2-rs", rev = "a87a7bb3f684350
 # GPUI's Linux event loop, as Zed patches it: each turn runs queued tasks for about 10ms, then
 # lets input and frames through, rather than run them all. Only GPUI uses it.
 calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+
+# [gix-merge-insert-order: 10]
+[patch."https://github.com/GitoxideLabs/gitoxide"]
+# Allow adjacent non-overlapping line changes and [gix-merge-insert-order] across parallel virtual branches to merge cleanly.
+gix-merge = { path = "vendor/gitoxide/gix-merge" }
 
 [workspace.lints.clippy]
 # Note that `all` doesn't include everything, so extra lints should be added here.

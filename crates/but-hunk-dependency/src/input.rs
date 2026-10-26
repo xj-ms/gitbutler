@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use but_core::TreeStatusKind;
-use gix::bstr::BString;
+use gix::bstr::{BString, ByteSlice};
 
 use crate::ui::HunkLockTarget;
 
@@ -48,6 +48,8 @@ pub struct InputDiffHunk {
     pub new_start: u32,
     /// The non-zero amount of lines included in the new version of the file.
     pub new_lines: u32,
+    /// Optional explicit `[gix-merge-insert-order: <i32>]` directive order for this hunk.
+    pub insert_order: Option<i32>,
 }
 
 impl InputDiffHunk {
@@ -69,14 +71,56 @@ impl InputDiffHunk {
             old_lines,
             new_start,
             new_lines,
-            diff: _,
+            diff,
         }: &but_core::unified_diff::DiffHunk,
     ) -> Self {
+        let segments = ordered_segments(&added_lines(diff));
         InputDiffHunk {
             old_start: *old_start,
             old_lines: *old_lines,
             new_start: *new_start,
             new_lines: *new_lines,
+            insert_order: segments.first().and_then(|(_, order)| *order),
         }
     }
+
+    /// Create one or more instances from unified `diff`, splitting pure-insertion
+    /// hunks (`old_lines == 0`) at `[gix-merge-insert-order: <i32>]` segment boundaries.
+    pub fn split_from_unified_diff(hunk: &but_core::unified_diff::DiffHunk) -> Vec<Self> {
+        if hunk.old_lines == 0 && hunk.new_lines > 0 {
+            let added = added_lines(&hunk.diff);
+            if added.len() == hunk.new_lines as usize {
+                let segments = ordered_segments(&added);
+                if segments.len() > 1 {
+                    return segments
+                        .into_iter()
+                        .map(|(range, insert_order)| InputDiffHunk {
+                            old_start: hunk.old_start,
+                            old_lines: 0,
+                            new_start: hunk.new_start + range.start as u32,
+                            new_lines: (range.end - range.start) as u32,
+                            insert_order,
+                        })
+                        .collect();
+                }
+            }
+        }
+        vec![Self::from_unified_diff(hunk)]
+    }
+}
+
+pub(crate) fn added_lines(diff: &BString) -> Vec<&[u8]> {
+    diff.lines()
+        .skip(1)
+        .filter(|line| line.starts_with(b"+"))
+        .map(|line| &line[1..])
+        .collect()
+}
+
+pub(crate) fn ordered_segments(
+    added_lines: &[&[u8]],
+) -> Vec<(std::ops::Range<usize>, Option<i32>)> {
+    gix::merge::blob::builtin_driver::text::split_ordered_line_ranges(added_lines.len(), |i| {
+        added_lines[i]
+    })
 }

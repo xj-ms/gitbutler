@@ -22,7 +22,7 @@ tracing.workspace = true
 anyhow.workspace = true
 itertools.workspace = true
 serde.workspace = true
-gix = { workspace = true, features = [] }
+gix = { workspace = true, features = ["merge"] }
 schemars = { workspace = true, optional = true }
 but-schemars = { workspace = true, optional = true }
 

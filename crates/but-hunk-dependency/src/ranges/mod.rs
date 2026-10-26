@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use but_core::TreeStatusKind;
+use but_core::{TreeStatusKind, unified_diff::DiffHunk};
 use gix::bstr::{BString, ByteSlice};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use crate::{InputCommit, InputDiffHunk, InputStack, ui::HunkLockTarget};
-use but_core::unified_diff::DiffHunk;
+use crate::{
+    InputCommit, InputDiffHunk, InputStack,
+    input::{added_lines, ordered_segments},
+    ui::HunkLockTarget,
+};
 
 mod hunk;
 pub use hunk::HunkRange;
@@ -151,11 +154,19 @@ impl WorkspaceRanges {
     pub fn intersection(&self, path: &BString, hunk: &DiffHunk) -> Option<Vec<&HunkRange>> {
         let start = hunk.old_start;
         let lines = hunk.old_lines;
+        let wt_insertion =
+            (lines == 0 && hunk.new_lines > 0).then(|| WorktreeInsertionInfo::from_diff_hunk(hunk));
         if let Some(hunk_range) = self.paths.get(path) {
             let intersection = hunk_range
                 .iter()
                 .filter(|hr| {
                     if hr.change_type == TreeStatusKind::Modification {
+                        if let Some(wt_info) = &wt_insertion
+                            && let Some(conflicts) =
+                                worktree_insertion_conflicts_with_range(start, wt_info, hr)
+                        {
+                            return conflicts;
+                        }
                         if hr.intersects(start, lines).unwrap_or(false) {
                             return true;
                         }
@@ -164,6 +175,11 @@ impl WorkspaceRanges {
                         //   AND the commit range is a deletion point (hr.lines == 0):
                         //   a deletion removes the anchor that the merge algorithm
                         //   uses to place the insertion, so this can conflict.
+                        // - symmetrically, the commit range is a pure insertion
+                        //   (hr.insert_order.is_some()) AND the worktree hunk deletes
+                        //   or modifies the base line immediately after it
+                        //   (lines > 0 && start == hr.start + hr.lines), which removes
+                        //   the anchor line that the commit's insertion is placed before.
                         //   Insertions adjacent to normal modification spans are safe
                         //   because `intersects()` already catches insertions *inside*
                         //   the span, and the merge algorithm can anchor outside it.
@@ -171,6 +187,9 @@ impl WorkspaceRanges {
                         //   substitution) via `hunk_suggests_boundary_insertion`.
                         hr.intersects_or_adjacent(start, lines).unwrap_or(false)
                             && ((lines == 0 && hr.lines == 0)
+                                || (lines > 0
+                                    && hr.insert_order.is_some()
+                                    && start == hr.start.saturating_add(hr.lines))
                                 || (lines > 0 && hunk_suggests_boundary_insertion(&hunk.diff)))
                     } else {
                         // For additions and deletions, we consider the hunk to always intersect.
@@ -258,6 +277,81 @@ fn hunk_suggests_boundary_insertion(diff: &gix::bstr::BString) -> bool {
     old_lines.last() != new_lines.last()
 }
 
+struct WorktreeInsertionInfo {
+    orders_strictly_increasing: bool,
+    min_order: i32,
+    max_order: i32,
+    leading_blank_lines: u32,
+    trailing_blank_lines: u32,
+}
+
+impl WorktreeInsertionInfo {
+    fn from_diff_hunk(hunk: &DiffHunk) -> Self {
+        let added = added_lines(&hunk.diff);
+        let is_blank = |line: &&[u8]| line.iter().all(|b| b.is_ascii_whitespace());
+        let leading_blank_lines = added.iter().copied().take_while(is_blank).count() as u32;
+        let trailing_blank_lines = added.iter().rev().copied().take_while(is_blank).count() as u32;
+
+        let segments = ordered_segments(&added);
+        let effective_orders: Vec<i32> = segments
+            .iter()
+            .map(|(_, order)| order.unwrap_or(0))
+            .collect();
+        let orders_strictly_increasing = effective_orders.windows(2).all(|w| w[0] < w[1]);
+        let min_order = effective_orders.first().copied().unwrap_or(0);
+        let max_order = effective_orders.last().copied().unwrap_or(0);
+
+        Self {
+            orders_strictly_increasing,
+            min_order,
+            max_order,
+            leading_blank_lines,
+            trailing_blank_lines,
+        }
+    }
+}
+
+/// Checks whether a pure insertion worktree hunk at `start` conflicts with a committed
+/// modification range `hr` when taking `[gix-merge-insert-order: <i32>]` directives into account.
+///
+/// Returns `Some(true)` if the insertion conflicts (must be locked to `hr`), `Some(false)` if
+/// `[gix-merge-insert-order]` cleanly resolves the parallel insertion without conflict, or
+/// `None` to fall back to the default range intersection logic.
+fn worktree_insertion_conflicts_with_range(
+    start: u32,
+    wt_info: &WorktreeInsertionInfo,
+    hr: &HunkRange,
+) -> Option<bool> {
+    // Only pure-insertion commit ranges (`hr.insert_order.is_some()` and `hr.lines > 0`)
+    // participate in `[gix-merge-insert-order]` conflict resolution.
+    let hr_order = hr.insert_order?;
+    if hr.lines == 0 {
+        return None;
+    }
+
+    let hr_end = hr.start.saturating_add(hr.lines);
+    if start < hr.start || start > hr_end {
+        return Some(false);
+    }
+
+    let at_top_boundary = start >= hr.start
+        && start <= hr.start.saturating_add(wt_info.trailing_blank_lines)
+        && start < hr_end;
+    if at_top_boundary {
+        return Some(!(wt_info.orders_strictly_increasing && wt_info.max_order < hr_order));
+    }
+
+    let at_bottom_boundary = start > hr.start
+        && start <= hr_end
+        && hr_end <= start.saturating_add(wt_info.leading_blank_lines);
+    if at_bottom_boundary {
+        return Some(!(wt_info.orders_strictly_increasing && wt_info.min_order > hr_order));
+    }
+
+    // Strictly inside `hr` and not explainable by blank-line slider shifts to either boundary.
+    Some(true)
+}
+
 /// Combines ranges from multiple branches/stacks into a single vector
 /// with adjusted line numbers. For this to work it is required that changes
 /// between stacks are not overlapping, which is already a hard requirement.
@@ -277,20 +371,22 @@ fn combine_path_ranges(path: &BString, stacks: &[StackRanges]) -> Vec<HunkRange>
     let mut hunk_indexes: Vec<usize> = vec![0; filtered_paths.len()];
 
     loop {
-        let start_lines = filtered_paths
+        // Find the index of the dependency path with the lowest adjusted start line,
+        // tie-breaking same-line pure insertions by `insert_order`.
+        let next_index = filtered_paths
             .iter()
             .enumerate()
-            .map(|(i, path_dep)| path_dep.hunk_ranges.get(hunk_indexes[i]))
-            .map(|hunk| hunk.map(|hunk_dep| hunk_dep.start))
-            .collect_vec();
-
-        // Find the index of the dependency path with the lowest start line.
-        let next_index = start_lines
-            .iter()
-            .enumerate() // We want to filter out None values, but keep their index.
-            .filter(|(_, start_line)| start_line.is_some())
-            .min_by_key(|&(index, &start_line)| {
-                start_line.unwrap() + start_lines[index].unwrap_or(0)
+            .filter_map(|(i, path_dep)| {
+                path_dep
+                    .hunk_ranges
+                    .get(hunk_indexes[i])
+                    .map(|hunk_dep| (i, hunk_dep))
+            })
+            .min_by_key(|&(index, hunk_dep)| {
+                (
+                    hunk_dep.start.saturating_add_signed(line_shifts[index]),
+                    hunk_dep.insert_order.unwrap_or(0),
+                )
             })
             .map(|(index, _)| index);
 
