@@ -1,114 +1,33 @@
-<div align="center">
-  
-  <img align="center" width="100px" src="https://gitbutler-docs-images-public.s3.us-east-1.amazonaws.com/md-logo.png" alt="GitButler logo" />
-  <br />
+# GitButler (Fork)
 
-  <h1 align="center">GitButler</h1>
-  
-  <p align="center">
-   <b>Git, <i>but</i> better</b>.
-   <br/>
-   GitButler is a modern Git-based version control interface with both a GUI and CLI built from the ground up for AI-powered workflows.
-    <br />
-    <br />
-    <a href="https://gitbutler.com">Website</a>
-    <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-    <a href="https://blog.gitbutler.com/">Blog</a>
-    <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-    <a href="https://docs.gitbutler.com/">Docs</a>
-    <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-    <a href="https://gitbutler.com/downloads">Downloads</a>
-  </p>
+This repository is a fork of [gitbutlerapp/gitbutler](https://github.com/gitbutlerapp/gitbutler), currently based on **0.22.3**.
 
-  <br/>
+For the original upstream README, see [README.upstream.md](README.upstream.md).
 
-  <img width="100%" src="https://gitbutler-docs-images-public.s3.us-east-1.amazonaws.com/app-preview-light.png" alt="GitButler desktop app preview" />
-  <p align="center"><i>Our beautiful GUI</i></p>
+## Changes in This Fork
 
-  <img width="100%" src="https://gitbutler-docs-images-public.s3.us-east-1.amazonaws.com/cli-preview.png" alt="GitButler CLI preview" />
-  <p align="center"><i>Our amazing <code>but</code> CLI</i></p>
+### Features
 
-  <br/>
+- **Switch Workspace Base Branch or Tag**: Switch your workspace target directly from the desktop app to another remote branch or tag without manually reconfiguring the project.
+- **Confirm Before Unapplying Conflicting Stacks**: When applying a branch that conflicts with active workspace branches, GitButler now shows a confirmation modal listing the affected stacks and conflicting files before unapplying them.
+- **Update Branch Option for Amended Remote Commits**: The **Update local branch...** action now appears when a remote branch was force-pushed with amended commits (same change ID, new commit SHA), alongside **Force push**.
+- **Clean Merging of Adjacent Changes Across Parallel Branches**: Parallel virtual branches that modify adjacent, non-overlapping lines in the same file now merge cleanly into the workspace without false conflicts.
+- **Ignore Whitespace in Diffs**: Toggle a view-only "Ignore whitespace" mode in diff headers to hide whitespace-only changes and collapse whitespace-only hunks while reviewing changes.
+- **Visual Studio Editor Support (Windows)**: Select Visual Studio as your default external editor on Windows, opening files directly at the target line in the matching solution/window.
+- **"Open with" Editor Submenus**: Right-click files or diff hunks to open them in any supported editor via an **Open with** submenu, in addition to your configured default editor.
+- **Highlight Matching Commit Files on Dependency Hover**: Hovering a hunk dependency lock badge now highlights the corresponding file inside expanded commit file lists (in both list and tree views) in addition to the commit row.
+- **Quick Project Removal in Project Switchers**: Remove non-active projects directly from the header project dropdown or project switcher with a confirmation dialog, without opening Project Settings first.
+- **Debug Console Toggle (Windows Debug Builds)**: Show or hide the dedicated debug terminal window from the **View** menu in Windows debug builds.
 
-[![TWEET][s1]][l1] [
-![BLUESKY][s8]][l8] [![DISCORD][s2]][l2]
+### Performance
 
-[![CI][s0]][l0] [![INSTA][s3]][l3] [![YOUTUBE][s5]][l5] [![DEEPWIKI][s7]][l7]
+- **Faster File & Hunk Assignment in Large Worktrees**: Staging or assigning files to a branch now diffs and reconciles only the affected file paths instead of re-diffing every modified file in the worktree, and skips a redundant ~1.15s operation-log snapshot.
+- **Cached Commit Diffs for Dependency Calculation**: Commit tree diffs are cached in memory across workspace watcher updates, avoiding repeated Git object lookups and diff computations when stacks have not changed.
+- **Performance Tracing for Staging & Amending**: Added detailed tracing spans across hunk assignment, dependency calculation, and commit amend/rebase paths to aid profiling.
 
-[s0]: https://github.com/gitbutlerapp/gitbutler/actions/workflows/push.yaml/badge.svg
-[l0]: https://github.com/gitbutlerapp/gitbutler/actions/workflows/push.yaml
-[s1]: https://img.shields.io/badge/Twitter-black?logo=x&logoColor=white
-[l1]: https://twitter.com/intent/follow?screen_name=gitbutler
-[s2]: https://img.shields.io/discord/1060193121130000425?label=Discord&color=5865F2
-[l2]: https://discord.gg/MmFkmaJ42D
-[s3]: https://img.shields.io/badge/Instagram-E4405F?logo=instagram&logoColor=white
-[l3]: https://www.instagram.com/gitbutler/
-[s5]: https://img.shields.io/youtube/channel/subscribers/UCEwkZIHGqsTGYvX8wgD0LoQ
-[l5]: https://www.youtube.com/@gitbutlerapp
-[s7]: https://deepwiki.com/badge.svg
-[l7]: https://deepwiki.com/gitbutlerapp/gitbutler
-[s8]: https://img.shields.io/badge/Bluesky-0285FF?logo=bluesky&logoColor=fff
-[l8]: https://bsky.app/profile/gitbutler.com
+### Bug Fixes
 
-</div>
-
-<br/>
-
-GitButler is a powerful new Git-based version control system, designed from scratch to be simple, powerful and flexible. It is designed for ease of use and modern agentic workflows.
-
-It features stacked branches, parallel branches, unlimited undo, easy commit mutations, forge integrations and more.
-
-Works instantly in any existing Git repo as a friendlier and more powerful drop-in Git user interface replacement - for you and your agents.
-
-## Main Features
-
-Why use GitButler instead of vanilla Git? What a great question.
-
-- **Stacked Branches** ([gui](https://docs.gitbutler.com/features/branch-management/stacked-branches), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/branching-and-commiting#stacked-branches))
-  - Effortlessly create branches stacked on other branches. Amend or edit any commit easily with automatic restacking.
-- **Parallel Branches** ([gui](https://docs.gitbutler.com/features/branch-management/virtual-branches), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/branching-and-commiting#parallel-branches))
-  - Organize work on multiple branches simultaneously, rather than constantly switching branches.
-- **Easy Commit Management** ([gui](https://docs.gitbutler.com/features/branch-management/commits), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/rubbing))
-  - Uncommit, reword, amend, move, split and squash commits by dragging and dropping or simple CLI commands. Forget about `rebase -i`, you don't need it anymore.
-- **Undo Timeline** ([gui](https://docs.gitbutler.com/features/timeline), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/operations-log))
-  - Logs all operations and changes and allows you to easily undo or revert any operation.
-- **First Class Conflicts** ([gui](https://docs.gitbutler.com/overview#conflicting-branches), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/conflict-resolution))
-  - Rebases always succeed. Commits can be marked as conflicted and resolved at any time, in any order.
-- **Forge Integration** ([gui](https://docs.gitbutler.com/features/forge-integration/github-integration), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/forges))
-  - Authenticate to GitHub, GitLab, or Bitbucket to easily open and update Pull Requests, list branches, get CI statuses and more. No other tools required.
-- **AI Tooling** ([gui](https://docs.gitbutler.com/features/ai-integration/ai-overview), [cli](https://docs.gitbutler.com/cli-guides/cli-tutorial/ai-stuff))
-  - Use built-in AI handlers to help create commit messages, branch names, PR descriptions and more.
-  - Easily install hooks or skills for all modern agent systems to level up their Git management.
-
-## Tech
-
-The GitButler desktop app is a [Tauri](https://tauri.app/)-based application. Its UI is written in [Svelte](https://svelte.dev/) using [TypeScript](https://www.typescriptlang.org) and its backend is written in [Rust](https://www.rust-lang.org/).
-
-The `but` CLI is the same Rust backend engine with a Rust command line UI.
-
-## Documentation
-
-You can find our end user documentation at: <https://docs.gitbutler.com>
-
-## Bugs and Feature Requests
-
-If you have a bug or feature request, feel free to open an [issue](https://github.com/gitbutlerapp/gitbutler/issues/new),
-or [join our Discord server](https://discord.gg/MmFkmaJ42D).
-
-## License
-
-The TLDR is that GitButler is under a [Fair Source](https://fair.io/) software license, meaning that you can use it, view the source, contribute, etc. You just can't build a competitor with it. It also becomes MIT after 2 years. So, MIT with an expiring non-compete clause.
-
-## Contributing
-
-So you want to help out? Please check out the [CONTRIBUTING.md](CONTRIBUTING.md)
-document.
-
-If you want to skip right to getting the code to actually compile, take a look
-at the [DEVELOPMENT.md](DEVELOPMENT.md) file.
-
-### Contributors
-
-<a href="https://github.com/gitbutlerapp/gitbutler/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=gitbutlerapp/gitbutler" />
-</a>
+- **Prevent Out-of-Memory Webview Crashes**: Fixed a reactive query subscription leak in the desktop UI (especially noticeable with locked files) that accumulated thousands of hooks over time and caused the renderer to crash near the 4 GB heap limit.
+- **Reliable Edit-Mode Checkout on Windows**: Saving and exiting edit mode no longer aborts halfway when another process (such as a terminal, IDE, or language server) holds an open handle to a deleted file's parent directory.
+- **Fix Windows Input-Lock Deadlock**: Backported the upstream `tao` fix to prevent window freezes caused by a Windows input-lock deadlock.
+- **Preserve Unminified Frontend in Debug Builds**: Passed `TAURI_ENV_DEBUG` through Turborepo so debug desktop builds retain unminified frontend bundles when requested.
