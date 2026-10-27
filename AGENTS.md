@@ -35,6 +35,11 @@ this order:
 - When a fix calls for a new mechanism (a new module, a new public API, or a parallel
   walk where one already exists), propose the intended shape before building it.
 
+## GitButler (`but`) CLI in This Repository
+
+- When running `but` commands against this repository, always use the `but` binary built from this repository (`.\target\debug\but.exe`, built via `cargo build -p but`) instead of a globally installed `but` on `PATH`.
+- This fork's workspace relies on fork-specific behavior (such as the `gix-merge` adjacent-line merge patch), so stock `but` releases on `PATH` may fail to merge workspace bases or use incompatible metadata defaults.
+
 ## Scoped Instructions
 
 - For Rust work under `crates/`, follow `crates/AGENTS.md`.
