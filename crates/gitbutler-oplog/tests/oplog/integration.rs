@@ -1075,11 +1075,11 @@ fn restore_keeps_index_stat_of_untouched_files() -> anyhow::Result<()> {
         guard.write_permission(),
     )?;
 
-    // `diff-files` lists entries whose stat doesn't match the file. Only the file the
-    // restore re-created needs to be hashed again.
+    // `diff-files` lists entries whose stat doesn't match the file. Untouched files keep their
+    // pre-checkout stat and the re-created file keeps the stat recorded by checkout.
     snapbox::assert_data_eq!(
         repo.invoke_git("diff-files --name-only"),
-        snapbox::str!["second"]
+        snapbox::str![""]
     );
     Ok(())
 }
@@ -1301,6 +1301,110 @@ fn snapshot(ctx: &mut Context) -> anyhow::Result<gix::ObjectId> {
     )
 }
 
+#[test]
+fn restore_snapshot_preserves_index_stat_cache() -> anyhow::Result<()> {
+    let Test { repo, ctx } = &mut Test::from_scenario("one-stack-two-commits", &["A"]);
+    let default_stat = gix::index::entry::Stat::default();
+
+    // Age the tracked files and refresh the index so `M`'s stat is non-racy relative to the
+    // pre-checkout index timestamp.
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for name in ["M", "first", "second"] {
+        fs::File::options()
+            .write(true)
+            .open(repo.projects_root().join(name))?
+            .set_modified(an_hour_ago)?;
+    }
+    repo.invoke_git("update-index --refresh");
+
+    let initial_m_stat = {
+        let gix_repo = ctx.repo.get()?;
+        let index = gix_repo.open_index()?;
+        let entry = index
+            .entry_by_path("M".into())
+            .context("M is tracked in the index")?;
+        assert_ne!(
+            entry.stat, default_stat,
+            "fixture starts with a populated stat cache for M"
+        );
+        entry.stat
+    };
+
+    let mut guard = ctx.exclusive_worktree_access();
+    let clean_snapshot = ctx.create_snapshot(
+        SnapshotDetails::new(OperationKind::OnDemandSnapshot),
+        guard.write_permission(),
+    )?;
+
+    // Modify `first` in the worktree (leaving `M` untouched) and capture a dirty snapshot.
+    fs::write(repo.projects_root().join("first"), "unstaged change\n")?;
+    let dirty_snapshot = ctx.create_snapshot(
+        SnapshotDetails::new(OperationKind::OnDemandSnapshot),
+        guard.write_permission(),
+    )?;
+
+    // Restore the clean snapshot: untouched M keeps its cached stat, and restored `first` gets a
+    // populated stat from checkout instead of being zeroed out by reset_index_to_tree.
+    ctx.restore_snapshot(
+        clean_snapshot,
+        RestoreKind::RestoreFromSnapshotViaUndo,
+        guard.write_permission(),
+    )?;
+    {
+        let gix_repo = ctx.repo.get()?;
+        let index = gix_repo.open_index()?;
+        let m_entry = index
+            .entry_by_path("M".into())
+            .context("M is still in the index")?;
+        assert_eq!(
+            m_entry.stat, initial_m_stat,
+            "restore_snapshot must preserve cached index stat for untouched tracked files"
+        );
+        let first_entry = index
+            .entry_by_path("first".into())
+            .context("first is still in the index")?;
+        assert_ne!(
+            first_entry.stat, default_stat,
+            "restore_snapshot must keep the checkout stat for restored worktree files"
+        );
+    }
+
+    // Restore the dirty snapshot where `first` has unstaged changes (worktree != index): M still
+    // keeps its cached stat, while `first` has a zeroed stat and is reported as modified.
+    ctx.restore_snapshot(
+        dirty_snapshot,
+        RestoreKind::RestoreFromSnapshotViaRedo,
+        guard.write_permission(),
+    )?;
+    {
+        let gix_repo = ctx.repo.get()?;
+        let index = gix_repo.open_index()?;
+        let m_entry = index
+            .entry_by_path("M".into())
+            .context("M is still in the index")?;
+        assert_eq!(
+            m_entry.stat, initial_m_stat,
+            "untouched M retains its stat cache when restoring a dirty snapshot"
+        );
+        let first_entry = index
+            .entry_by_path("first".into())
+            .context("first is still in the index")?;
+        assert_eq!(
+            first_entry.stat, default_stat,
+            "unstaged file `first` has a zeroed index stat so status is forced to diff it"
+        );
+        let changes = but_core::diff::worktree_changes(&gix_repo)?.changes;
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| change.path.as_bstr())
+                .collect::<Vec<_>>(),
+            [b"first".as_bstr()],
+            "restored unstaged modification in `first` remains visible to worktree_changes"
+        );
+    }
+    Ok(())
+}
 struct Test {
     repo: Sandbox,
     ctx: Context,
