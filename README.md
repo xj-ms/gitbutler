@@ -21,6 +21,7 @@ For the original upstream README, see [README.upstream.md](README.upstream.md).
 
 ### Performance
 
+- **Preserve `.git/index` Stat Cache Across Oplog Snapshot Restores**: Restoring an operation-log snapshot (`undo`/`redo`/restore) now preserves valid `.git/index` `stat` metadata instead of zeroing out every entry via `index_from_tree`, preventing `gix::status` from re-hashing and re-running clean filters (such as `git-lfs filter-process`) across the entire worktree on every subsequent status check.
 - **Faster File & Hunk Assignment in Large Worktrees**: Staging or assigning files to a branch now diffs and reconciles only the affected file paths instead of re-diffing every modified file in the worktree, and skips a redundant ~1.15s operation-log snapshot.
 - **Cached Commit Diffs for Dependency Calculation**: Commit tree diffs are cached in memory across workspace watcher updates, avoiding repeated Git object lookups and diff computations when stacks have not changed.
 - **Performance Tracing for Staging & Amending**: Added detailed tracing spans across hunk assignment, dependency calculation, and commit amend/rebase paths to aid profiling.
