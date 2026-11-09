@@ -421,6 +421,50 @@ export class StackService {
 		return this.backendApi.endpoints.pushWorkspaceBranchAndAncestors.useMutation(options);
 	}
 
+	workspaceTrackingBranch(projectId: string) {
+		return this.backendApi.endpoints.workspaceTrackingBranch.useQuery({ projectId });
+	}
+
+	async fetchWorkspaceTrackingBranch(projectId: string) {
+		return await this.backendApi.endpoints.workspaceTrackingBranch.fetch(
+			{ projectId },
+			{ forceRefetch: true },
+		);
+	}
+
+	get pushAll() {
+		const options = {
+			sideEffect: (result: BranchPushResult) => {
+				setTimeout(() => {
+					const invalidations = [invalidatesList(ReduxTag.PullRequests)];
+
+					if (result) {
+						for (const [, , name] of result.branchToRemote) {
+							invalidations.push(invalidatesItem(ReduxTag.Checks, name));
+						}
+					}
+
+					this.dispatch(this.backendApi.util.invalidateTags(invalidations));
+				}, 2000);
+			},
+			onError: (commandError: NormalizedError) => {
+				const { code, message } = commandError;
+				if (code === "GitForcePushProtection") {
+					throw commandError;
+				}
+				const reason =
+					code === "ProjectGitAuth" ? "an authentication failure" : "an unforeseen error";
+				showWarning(
+					"Git push failed",
+					`Your branches cannot be pushed due to ${reason}: ${message}\n\nPlease check our [documentation](https://docs.gitbutler.com/troubleshooting/fetch-push)\non fetching and pushing for ways to resolve the problem.`,
+				);
+			},
+			throwSilentError: true,
+		};
+
+		return this.backendApi.endpoints.pushAll.useMutation(options);
+	}
+
 	createCommit() {
 		return this.backendApi.endpoints.commitCreate.useMutation();
 	}

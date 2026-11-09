@@ -285,6 +285,77 @@ fn force_push_protection_is_observed_when_pushing_bottom_branch() -> anyhow::Res
 }
 
 #[test]
+fn workspace_push_all_persists_tracking_branch_and_pushes_workspace_plus_out_of_sync_branches()
+-> anyhow::Result<()> {
+    let (_tmp, repo, meta) = fixture("push")?;
+
+    // First push `bottom` so it is already up to date on the remote, leaving `middle`, `top`, and `solo` out of sync.
+    let bottom_result = push(&repo, &meta, r("refs/heads/bottom"), false, false, false)?;
+    apply_remote_tracking_updates(&repo, &bottom_result)?;
+
+    let (info, workspace) = head_info(&repo, &meta)?;
+    assert_eq!(status(&info, "bottom"), NothingToPush);
+    assert_eq!(status(&info, "middle"), CompletelyUnpushed);
+    assert_eq!(status(&info, "top"), CompletelyUnpushed);
+    assert_eq!(status(&info, "solo"), CompletelyUnpushed);
+
+    let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+    let result = but_workspace::legacy::push::workspace_push_all(
+        &repo,
+        &workspace,
+        &project_meta(&repo)?,
+        &info,
+        &mut db,
+        false,
+        "workspace-sync",
+        false,
+        false,
+        false,
+        false,
+        Vec::new(),
+    )?;
+
+    assert_eq!(result.remote, "origin");
+    assert_eq!(
+        result
+            .branch_to_remote
+            .iter()
+            .map(|(branch, remote_ref, remote_branch)| (
+                branch.as_str(),
+                remote_ref.to_string(),
+                remote_branch.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "gitbutler/workspace",
+                "refs/remotes/origin/workspace-sync".to_string(),
+                "workspace-sync"
+            ),
+            ("solo", "refs/remotes/origin/solo".to_string(), "solo"),
+            ("middle", "refs/remotes/origin/middle".to_string(), "middle"),
+            ("top", "refs/remotes/origin/top".to_string(), "top"),
+        ]
+    );
+
+    // Reopen repo to verify persisted config and ensure `head_info` still succeeds with workspace tracking configured.
+    let repo = gix::open(repo.path())?;
+    assert_eq!(
+        but_workspace::legacy::push::workspace_remote_branch(&repo)?.as_deref(),
+        Some("workspace-sync")
+    );
+
+    apply_remote_tracking_updates(&repo, &result)?;
+    let (info, _) = head_info(&repo, &meta)?;
+    assert_eq!(status(&info, "bottom"), NothingToPush);
+    assert_eq!(status(&info, "middle"), NothingToPush);
+    assert_eq!(status(&info, "top"), NothingToPush);
+    assert_eq!(status(&info, "solo"), NothingToPush);
+
+    Ok(())
+}
+
+#[test]
 fn force_push_protection_is_observed_when_pushing_top_branch() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-requiring-force")?;
 

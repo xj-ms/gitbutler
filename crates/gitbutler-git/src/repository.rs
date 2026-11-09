@@ -598,6 +598,96 @@ where
     Err(base_error.into())
 }
 
+/// Pushes multiple refspecs to the given remote in the repository at the given path in a single
+/// `git push` invocation.
+#[expect(clippy::too_many_arguments)]
+pub async fn push_refspecs<P, F, Fut, E>(
+    repo_path: P,
+    executor: E,
+    remote: &str,
+    refspecs: &[RefSpec],
+    force: bool,
+    force_push_protection: bool,
+    on_prompt: Option<F>,
+    push_opts: Vec<String>,
+) -> Result<String, crate::Error<Error<E>>>
+where
+    P: AsRef<Path>,
+    E: GitExecutor,
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    let mut args = vec!["push", "--quiet", "--no-verify"];
+
+    let has_non_deletion = refspecs.iter().any(|r| r.source.is_some());
+    let refspec_strings: Vec<String> = refspecs.iter().map(ToString::to_string).collect();
+
+    args.push(remote);
+    for refspec in &refspec_strings {
+        args.push(refspec.as_str());
+    }
+
+    if force {
+        if force_push_protection {
+            args.push("--force-with-lease");
+            if has_non_deletion {
+                args.push("--force-if-includes");
+            }
+        } else {
+            args.push("--force");
+        }
+    }
+
+    for opt in push_opts.iter() {
+        args.push("-o");
+        args.push(opt.as_str());
+    }
+
+    let (status, stdout, stderr) =
+        execute_with_auth_harness(HarnessEnv::Repo(repo_path), &executor, &args, on_prompt).await?;
+
+    if status == 0 {
+        return Ok(stderr);
+    }
+
+    let base_error = Error::<E>::Failed {
+        status,
+        args: args.into_iter().map(Into::into).collect(),
+        stdout,
+        stderr: stderr.clone(),
+    };
+
+    if status == 1 && force && force_push_protection {
+        return Err(crate::Error::ForcePushProtection(base_error));
+    }
+
+    if let Some(refname) = stderr
+        .lines()
+        .find(|line| line.to_lowercase().contains("does not match any"))
+        .and_then(|line| line.split_whitespace().last())
+    {
+        return Err(crate::Error::RefNotFound(refname.to_owned()));
+    }
+
+    if stderr.to_lowercase().contains("permission denied") {
+        return Err(crate::Error::AuthorizationFailed(base_error));
+    }
+
+    if stderr.to_lowercase().contains("(no new changes)") {
+        return Err(crate::Error::GerritNoNewChanges(base_error));
+    }
+
+    let lowercased_stderr = stderr.to_lowercase();
+    if lowercased_stderr.contains("! [rejected]")
+        || lowercased_stderr.contains("(non-fast-forward)")
+        || lowercased_stderr.contains("(fetch first)")
+    {
+        return Err(crate::Error::NonFastForward(base_error));
+    }
+
+    Err(base_error.into())
+}
+
 /// Clones the given repository URL to the target directory.
 ///
 /// If `on_prompt` is provided, we override SSH_ASKPASS to point to our custom askpass client to

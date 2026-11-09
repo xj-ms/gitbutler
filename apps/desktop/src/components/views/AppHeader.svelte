@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
 	import CreateBranchModal from "$components/branch/CreateBranchModal.svelte";
+	import PushAllModal from "$components/forge/PushAllModal.svelte";
 	import SyncButton from "$components/forge/SyncButton.svelte";
 	import IntegrateUpstreamModal from "$components/upstream/IntegrateUpstreamModal.svelte";
 	import { BACKEND } from "$lib/backend";
@@ -151,6 +152,7 @@
 	}
 
 	let createBranchModal = $state<CreateBranchModal>();
+	let pushAllModal = $state<PushAllModal>();
 
 	$effect(() => shortcutService.on("create-branch", () => createBranchModal?.show()));
 	$effect(() =>
@@ -316,6 +318,16 @@
 	<div class="chrome-right" data-tauri-drag-region={useCustomTitleBar}>
 		{#if isOnWorkspacePage}
 			<Button
+				testId={TestId.ChromeHeaderPushAllButton}
+				kind="outline"
+				icon="push-all"
+				reversedDirection
+				disabled={actionsDisabled || isNotInWorkspace}
+				onclick={() => pushAllModal?.show()}
+			>
+				Push all
+			</Button>
+			<Button
 				testId={TestId.ChromeHeaderCreateBranchButton}
 				kind="outline"
 				icon="plus"
@@ -329,6 +341,7 @@
 	</div>
 </div>
 
+<PushAllModal bind:this={pushAllModal} {projectId} />
 <CreateBranchModal bind:this={createBranchModal} {projectId} />
 
 <style>

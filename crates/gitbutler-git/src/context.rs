@@ -242,6 +242,31 @@ where
     let branch: gix::refs::FullName = branch.try_into().map_err(Into::into)?;
     let (remote, branch_name) = remote_tracking_branch_parts(repo, branch.as_ref())?;
     let refspec = refspec.unwrap_or_else(|| format!("{head}:refs/heads/{branch_name}"));
+    push_refspecs_with_askpass(
+        repo,
+        &remote,
+        vec![refspec],
+        with_force,
+        force_push_protection,
+        askpass_broker,
+        push_opts,
+    )
+}
+
+/// Push one or more refspecs to `remote` in a single `git push` invocation.
+#[allow(clippy::too_many_arguments)]
+pub fn push_refspecs_with_askpass(
+    repo: &gix::Repository,
+    remote: &str,
+    refspecs: Vec<String>,
+    with_force: bool,
+    force_push_protection: bool,
+    askpass_broker: Option<Option<but_core::Id<'S'>>>,
+    push_opts: Vec<String>,
+) -> Result<String> {
+    if refspecs.is_empty() {
+        return Ok(String::new());
+    }
 
     let on_prompt = if askpass::get_broker().is_some() {
         Some(move |prompt: String| handle_git_prompt_push(prompt, askpass_broker))
@@ -250,20 +275,26 @@ where
     };
 
     let repo_path = repo.git_dir().to_owned();
+    let remote = remote.to_owned();
     let result = std::thread::spawn(move || -> Result<_> {
         let runtime = tokio::runtime::Runtime::new().context(
             but_error::Context::new("failed to initialize async runtime for git push")
                 .with_code(Code::Unknown),
         )?;
-        let refspec = crate::RefSpec::parse(&refspec).context(
-            but_error::Context::new(format!("failed to parse git push refspec `{refspec}`"))
-                .with_code(Code::Validation),
-        )?;
-        Ok(runtime.block_on(crate::push(
+        let parsed_refspecs: Vec<crate::RefSpec> = refspecs
+            .iter()
+            .map(|r| {
+                crate::RefSpec::parse(r).context(
+                    but_error::Context::new(format!("failed to parse git push refspec `{r}`"))
+                        .with_code(Code::Validation),
+                )
+            })
+            .collect::<Result<_>>()?;
+        Ok(runtime.block_on(crate::push_refspecs(
             repo_path,
             crate::tokio::TokioExecutor,
             &remote,
-            refspec,
+            &parsed_refspecs,
             with_force,
             force_push_protection,
             on_prompt,

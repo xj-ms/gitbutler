@@ -451,6 +451,152 @@ pub struct WorkspaceBranchAndAncestorsPushOutcome {
     pub review_sync: but_forge::ReviewSyncOutcome,
 }
 
+/// Information about the configured remote-tracking branch for `gitbutler/workspace`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTrackingBranch {
+    /// The resolved default push remote name (for example `"origin"`).
+    pub remote_name: String,
+    /// The configured remote branch short name (for example `"workspace-head"`), if any.
+    pub branch_name: Option<String>,
+}
+
+/// Get the default push remote and the configured remote-tracking branch name for `gitbutler/workspace`.
+#[but_api]
+#[instrument(err(Debug))]
+pub fn workspace_tracking_branch(ctx: &but_ctx::Context) -> Result<WorkspaceTrackingBranch> {
+    let repo = ctx.repo.get()?;
+    let project_meta = ctx.project_meta()?;
+    let remote_name = but_workspace::legacy::push::resolve_push_remote(&repo, &project_meta)?;
+    let branch_name = but_workspace::legacy::push::workspace_remote_branch(&repo)?;
+    Ok(WorkspaceTrackingBranch {
+        remote_name,
+        branch_name,
+    })
+}
+
+/// Push `gitbutler/workspace` to `workspace_remote_branch` on the default remote (persisting its
+/// tracking branch configuration in local Git config), along with all out-of-sync applied branches.
+#[but_api(json::PushResult)]
+#[instrument(err(Debug))]
+pub async fn workspace_push_all(
+    ctx: ThreadSafeContext,
+    workspace_remote_branch: String,
+    skip_force_push_protection: bool,
+    run_hooks: bool,
+    push_opts: Vec<but_gerrit::PushFlag>,
+) -> Result<WorkspaceBranchAndAncestorsPushOutcome> {
+    let sync_ctx = ctx.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut ctx = ctx.into_thread_local();
+        workspace_push_all_only(
+            &mut ctx,
+            &workspace_remote_branch,
+            skip_force_push_protection,
+            run_hooks,
+            push_opts,
+        )
+    })
+    .await
+    .context("Push all task failed")??;
+
+    // Best-effort review synchronization for any pushed local branches when the target ref is not a tag.
+    let pushed_local_branches: Vec<(String, String, String)> = result
+        .branch_sha_updates
+        .iter()
+        .filter(|(name, _, _)| name != "gitbutler/workspace")
+        .cloned()
+        .collect();
+    let review_sync = if let Some((first_branch, _, _)) = pushed_local_branches.first()
+        && let Ok(full_branch) =
+            gix::refs::Category::LocalBranch.to_full_name(first_branch.as_str())
+    {
+        let target_is_tag = {
+            let local_ctx = sync_ctx.clone().into_thread_local();
+            local_ctx
+                .project_meta()
+                .ok()
+                .and_then(|m| m.target_ref)
+                .is_some_and(|t| t.category() == Some(gix::refs::Category::Tag))
+        };
+        if target_is_tag {
+            but_forge::ReviewSyncOutcome::NotNeeded
+        } else {
+            crate::legacy::forge::sync_review_stacks_after_push(
+                sync_ctx,
+                full_branch,
+                pushed_local_branches,
+            )
+            .await
+        }
+    } else {
+        but_forge::ReviewSyncOutcome::NotNeeded
+    };
+
+    Ok(WorkspaceBranchAndAncestorsPushOutcome {
+        push: result,
+        review_sync,
+    })
+}
+
+/// Perform only the Git push portion of [`workspace_push_all()`].
+pub fn workspace_push_all_only(
+    ctx: &mut Context,
+    workspace_remote_branch: &str,
+    skip_force_push_protection: bool,
+    run_hooks: bool,
+    push_opts: Vec<but_gerrit::PushFlag>,
+) -> Result<gitbutler_git::PushResult> {
+    let repo = ctx.clone_repo_for_merging_non_persisting()?;
+    let meta = ctx.meta()?;
+    let mut db = ctx.db.get_cache_mut()?;
+    let ws = but_graph::Graph::from_head(
+        &repo,
+        &meta,
+        ctx.project_meta()?,
+        &mut db,
+        but_graph::init::Options {
+            worktrees: ctx.settings.feature_flags.worktree_manipulation,
+            ..but_graph::init::Options::limited()
+        },
+    )?
+    .into_workspace()?;
+    let gerrit_mode_enabled = repo.git_settings()?.gitbutler_gerrit_mode.unwrap_or(false);
+    let gerrit_mode = if gerrit_mode_enabled {
+        but_workspace::ref_info::GerritMode::Enabled(db.gerrit_metadata())
+    } else {
+        but_workspace::ref_info::GerritMode::Disabled
+    };
+    let head_info = but_workspace::ref_info::graph_to_ref_info(
+        &ws,
+        &repo,
+        but_workspace::ref_info::Options {
+            project_meta: ctx.project_meta()?,
+            traversal: but_graph::init::Options::limited(),
+            expensive_commit_info: true,
+            gerrit_mode,
+        },
+    )?;
+    let head_info = head_info.pruned_to_entrypoint();
+
+    let result = but_workspace::legacy::push::workspace_push_all(
+        &repo,
+        &ws,
+        &ctx.project_meta()?,
+        &head_info,
+        &mut db,
+        gerrit_mode_enabled,
+        workspace_remote_branch,
+        skip_force_push_protection,
+        ctx.legacy_project.force_push_protection,
+        run_hooks,
+        ctx.legacy_project.husky_hooks_enabled,
+        push_opts,
+    )?;
+
+    Ok(result)
+}
+
 /// Perform only the Git push portion of [`workspace_branch_and_ancestors_push()`].
 pub fn workspace_branch_and_ancestors_push_only(
     ctx: &mut Context,
