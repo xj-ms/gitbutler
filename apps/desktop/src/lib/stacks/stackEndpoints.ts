@@ -61,6 +61,7 @@ import type {
 	WorktreeListing,
 	BranchRenameResult,
 	PushResult,
+	WorkspaceTrackingBranch,
 } from "@gitbutler/but-sdk";
 
 /** Where a new commit goes: `side` of `relativeTo`. */
@@ -365,6 +366,34 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 			invalidatesTags: (_result, _error, args) => [
 				invalidatesItem(ReduxTag.StackDetails, args.stackId),
 				invalidatesList(ReduxTag.StackDetails),
+				invalidatesList(ReduxTag.BranchListing),
+			],
+		}),
+		workspaceTrackingBranch: build.query<WorkspaceTrackingBranch, { projectId: string }>({
+			extraOptions: { command: "workspace_tracking_branch" },
+			query: (args) => args,
+			providesTags: [providesList(ReduxTag.Stacks), providesList(ReduxTag.HeadSha)],
+		}),
+		pushAll: build.mutation<
+			BranchPushResult,
+			{
+				projectId: string;
+				workspaceRemoteBranch: string;
+				skipForcePushProtection: boolean;
+				runHooks: boolean;
+				pushOpts: GerritPushFlag[];
+			}
+		>({
+			extraOptions: {
+				command: "workspace_push_all",
+				actionName: "Push All",
+			},
+			query: (args) => args,
+			invalidatesTags: [
+				// Pushing updates remote-tracking refs without moving local HEAD, so invalidate
+				// `Stacks` to refetch `workspaceDetails` (`head_info` push statuses) and
+				// `workspaceTrackingBranch`, and `BranchListing` to refresh remote branch status.
+				invalidatesList(ReduxTag.Stacks),
 				invalidatesList(ReduxTag.BranchListing),
 			],
 		}),

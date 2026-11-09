@@ -380,6 +380,8 @@ fn main() -> anyhow::Result<()> {
                 legacy::workspace::tauri_branch_details::branch_details,
                 legacy::workspace::tauri_discard_worktree_changes::discard_worktree_changes,
                 legacy::workspace::tauri_stash_into_branch::stash_into_branch,
+                legacy::workspace::tauri_workspace_tracking_branch::workspace_tracking_branch,
+                legacy::workspace::tauri_workspace_push_all::workspace_push_all,
                 legacy::workspace::tauri_workspace_branch_and_ancestors_push::workspace_branch_and_ancestors_push,
                 legacy::absorb::tauri_absorb::absorb,
                 legacy::absorb::tauri_absorption_plan::absorption_plan,
