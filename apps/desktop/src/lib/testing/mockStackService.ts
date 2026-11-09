@@ -88,6 +88,18 @@ export function getStackServiceMock() {
 	StackServiceMock.prototype.updateStack = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.updateStackOrder = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.pushStack = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
+	StackServiceMock.prototype.pushAll = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
+	StackServiceMock.prototype.workspaceTrackingBranch = vi.fn(() => {
+		return reactive(() =>
+			mockReduxFulfilled({
+				remoteName: "origin",
+				branchName: null,
+				outOfSyncBase: null,
+				outOfSyncSubmodules: [],
+			}),
+		);
+	});
+	StackServiceMock.prototype.fetchWorkspaceTrackingBranch = vi.fn();
 	StackServiceMock.prototype.createCommit = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.updateCommitMessage = [
 		vi.fn(),

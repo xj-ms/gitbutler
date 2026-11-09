@@ -301,6 +301,31 @@ where
     let branch: gix::refs::FullName = branch.try_into().map_err(Into::into)?;
     let (remote, branch_name) = remote_tracking_branch_parts(repo, branch.as_ref())?;
     let refspec = refspec.unwrap_or_else(|| format!("{head}:refs/heads/{branch_name}"));
+    push_refspecs_with_askpass(
+        repo,
+        &remote,
+        vec![refspec],
+        with_force,
+        force_push_protection,
+        askpass_broker,
+        push_opts,
+    )
+}
+
+/// Push one or more refspecs to `remote` in a single `git push` invocation.
+#[allow(clippy::too_many_arguments)]
+pub fn push_refspecs_with_askpass(
+    repo: &gix::Repository,
+    remote: &str,
+    refspecs: Vec<String>,
+    with_force: bool,
+    force_push_protection: bool,
+    askpass_broker: Option<Option<but_core::Id<'S'>>>,
+    push_opts: Vec<String>,
+) -> Result<String> {
+    if refspecs.is_empty() {
+        return Ok(String::new());
+    }
 
     let on_prompt = if askpass::get_broker().is_some() {
         Some(move |prompt: String| handle_git_prompt_push(prompt, askpass_broker))
@@ -309,20 +334,26 @@ where
     };
 
     let repo_path = repo.git_dir().to_owned();
+    let remote = remote.to_owned();
     let result = std::thread::spawn(move || -> Result<_> {
         let runtime = tokio::runtime::Runtime::new().context(
             but_error::Context::new("failed to initialize async runtime for git push")
                 .with_code(Code::Unknown),
         )?;
-        let refspec = crate::RefSpec::parse(&refspec).context(
-            but_error::Context::new(format!("failed to parse git push refspec `{refspec}`"))
-                .with_code(Code::Validation),
-        )?;
-        Ok(runtime.block_on(crate::push(
+        let parsed_refspecs: Vec<crate::RefSpec> = refspecs
+            .iter()
+            .map(|r| {
+                crate::RefSpec::parse(r).context(
+                    but_error::Context::new(format!("failed to parse git push refspec `{r}`"))
+                        .with_code(Code::Validation),
+                )
+            })
+            .collect::<Result<_>>()?;
+        Ok(runtime.block_on(crate::push_refspecs(
             repo_path,
             crate::tokio::TokioExecutor,
             &remote,
-            refspec,
+            &parsed_refspecs,
             with_force,
             force_push_protection,
             on_prompt,
@@ -358,6 +389,72 @@ where
                 _ => Err(map_needs_authorization(err)),
             },
         }
+}
+
+/// Resolve the commit SHA that `ref_name` points to on `remote` via `git ls-remote`, peeling
+/// annotated tags (`^{}`) when present. Returns `Ok(None)` if the ref does not exist on the remote.
+pub fn ls_remote_commit_with_askpass(
+    repo: &gix::Repository,
+    remote: &str,
+    ref_name: &str,
+    action: Option<String>,
+) -> Result<Option<gix::ObjectId>> {
+    let on_prompt = if askpass::get_broker().is_some() {
+        Some(move |prompt: String| handle_git_prompt_fetch(prompt, action.clone()))
+    } else {
+        None
+    };
+
+    let repo_path = repo.git_dir().to_owned();
+    let remote = remote.to_owned();
+    let pattern = format!("{ref_name}*");
+    let exact_ref = ref_name.to_owned();
+    let peeled_ref = format!("{ref_name}^{{}}");
+    let stdout = std::thread::spawn(move || -> Result<_> {
+        let runtime = tokio::runtime::Runtime::new().context(
+            but_error::Context::new("failed to initialize async runtime for git ls-remote")
+                .with_code(Code::Unknown),
+        )?;
+        Ok(runtime.block_on(crate::ls_remote(
+            repo_path,
+            crate::tokio::TokioExecutor,
+            &remote,
+            &pattern,
+            on_prompt,
+        )))
+    })
+    .join()
+    .map_err(|panic| {
+        let reason = if let Some(message) = panic.downcast_ref::<String>() {
+            message.clone()
+        } else if let Some(message) = panic.downcast_ref::<&'static str>() {
+            (*message).to_owned()
+        } else {
+            "unknown panic payload".to_owned()
+        };
+
+        anyhow!("git ls-remote worker thread panicked: {reason}").context(
+            but_error::Context::new("git ls-remote failed unexpectedly").with_code(Code::Unknown),
+        )
+    })??
+    .map_err(map_needs_authorization)?;
+
+    let mut direct_oid: Option<gix::ObjectId> = None;
+    let mut peeled_oid: Option<gix::ObjectId> = None;
+    for line in stdout.lines() {
+        let Some((sha, name)) = line.split_once('\t') else {
+            continue;
+        };
+        let sha = sha.trim();
+        let name = name.trim();
+        if name == peeled_ref {
+            peeled_oid = gix::ObjectId::from_hex(sha.as_bytes()).ok();
+        } else if name == exact_ref {
+            direct_oid = gix::ObjectId::from_hex(sha.as_bytes()).ok();
+        }
+    }
+
+    Ok(peeled_oid.or(direct_oid))
 }
 
 fn serialize_branch_to_remote<S>(

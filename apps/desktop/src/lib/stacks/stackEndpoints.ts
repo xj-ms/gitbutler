@@ -63,6 +63,23 @@ import type {
 	PushResult,
 } from "@gitbutler/but-sdk";
 
+export type OutOfSyncBaseTarget = {
+	path: string | null;
+	refName: string;
+	shortName: string;
+	remoteName: string;
+	isTag: boolean;
+	targetSha: string;
+	remoteSha: string | null;
+};
+
+export type WorkspaceTrackingBranch = {
+	remoteName: string;
+	branchName: string | null;
+	outOfSyncBase: OutOfSyncBaseTarget | null;
+	outOfSyncSubmodules: OutOfSyncBaseTarget[];
+};
+
 /** Where a new commit goes: `side` of `relativeTo`. */
 export type CommitPlacement = {
 	relativeTo: RelativeTo;
@@ -366,6 +383,36 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				invalidatesItem(ReduxTag.StackDetails, args.stackId),
 				invalidatesList(ReduxTag.StackDetails),
 				invalidatesList(ReduxTag.BranchListing),
+			],
+		}),
+		workspaceTrackingBranch: build.query<WorkspaceTrackingBranch, { projectId: string }>({
+			extraOptions: { command: "workspace_tracking_branch" },
+			query: (args) => args,
+			providesTags: [providesList(ReduxTag.Stacks), providesList(ReduxTag.HeadSha)],
+		}),
+		pushAll: build.mutation<
+			BranchPushResult,
+			{
+				projectId: string;
+				workspaceRemoteBranch: string;
+				skipForcePushProtection: boolean;
+				runHooks: boolean;
+				pushOpts: GerritPushFlag[];
+			}
+		>({
+			extraOptions: {
+				command: "workspace_push_all",
+				actionName: "Push All",
+			},
+			query: (args) => args,
+			invalidatesTags: [
+				// Pushing updates remote-tracking refs without moving local HEAD, so invalidate
+				// `Stacks` to refetch `workspaceDetails` (`head_info` push statuses) and
+				// `workspaceTrackingBranch`, `BranchListing` to refresh remote branch status,
+				// and `BaseBranchData` in case the workspace base was pushed.
+				invalidatesList(ReduxTag.Stacks),
+				invalidatesList(ReduxTag.BranchListing),
+				invalidatesList(ReduxTag.BaseBranchData),
 			],
 		}),
 		/** Commit `changes` from `checkout`, the main one by default. */
