@@ -282,6 +282,10 @@ pub fn update_stack_order_with_perm(
         .ref_name()
         .context("Updating stack order requires a managed workspace")?;
     let mut workspace_metadata = meta.workspace(workspace_ref)?;
+    // Reconcile metadata with the projected workspace first: graph mutations (such as
+    // `move_branch` or `tear_off_branch`) do not rewrite `virtual_branches.toml`, so projected
+    // stacks or their top branch refs may be missing or stale in `workspace_metadata`.
+    ws.reconcile_metadata(&mut workspace_metadata)?;
     let changed = apply_stack_order_updates(&mut workspace_metadata, stacks)?;
 
     if changed {

@@ -1,6 +1,7 @@
 import { sortLikeFileTree } from "$lib/files/filetreeV3";
 import { showWarning } from "$lib/notifications/toasts";
 import {
+	reorderWorkspaceStacks,
 	selectWorkspaceStackById,
 	selectWorkspaceStackDetails,
 } from "$lib/stacks/headInfoAdapters";
@@ -124,9 +125,26 @@ export class StackService {
 		return this.backendApi.endpoints.createStack.mutate;
 	}
 
-	get updateStackOrder() {
-		return this.backendApi.endpoints.updateStackOrder.mutate;
-	}
+	updateStackOrder = async (args: {
+		projectId: string;
+		stacks: { id: string; order: number }[];
+	}) => {
+		const patchResult = this.dispatch(
+			this.backendApi.util.updateQueryData(
+				"workspaceDetails",
+				{ projectId: args.projectId },
+				(draft) => {
+					reorderWorkspaceStacks(draft, args.stacks);
+				},
+			),
+		);
+		try {
+			return await this.backendApi.endpoints.updateStackOrder.mutate(args);
+		} catch (err) {
+			patchResult.undo();
+			throw err;
+		}
+	};
 
 	branches(projectId: string, stackId?: string) {
 		return this.backendApi.endpoints.workspaceDetails.useQuery(

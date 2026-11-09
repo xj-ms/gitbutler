@@ -85,6 +85,27 @@ export function selectWorkspaceStackById(
 	return stackAdapter.getSelectors().selectById(workspaceDetails.stacks, stackId);
 }
 
+export function reorderWorkspaceStacks(
+	workspaceDetails: WorkspaceDetails,
+	branches: { id: string; order: number }[],
+): void {
+	if (branches.length === 0) return;
+
+	const requestedOrders = new Map(branches.map((b) => [b.id, b.order]));
+	const originalOrders = new Map(
+		workspaceDetails.stacks.ids.map((stackId, index) => [stackId, index]),
+	);
+	const sortedIds = [...workspaceDetails.stacks.ids].sort((a, b) => {
+		const orderA = requestedOrders.get(a) ?? originalOrders.get(a) ?? Number.MAX_SAFE_INTEGER;
+		const orderB = requestedOrders.get(b) ?? originalOrders.get(b) ?? Number.MAX_SAFE_INTEGER;
+		return orderA - orderB;
+	});
+	workspaceDetails.stacks = {
+		...workspaceDetails.stacks,
+		ids: sortedIds,
+	};
+}
+
 export function workspaceStackDetailTags(workspaceDetails: WorkspaceDetails): string[] {
 	return Object.keys(workspaceDetails.stackDetails);
 }

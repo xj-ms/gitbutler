@@ -268,10 +268,6 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				actionName: "Update Stack Order",
 			},
 			query: (args) => args,
-			// This invalidation causes the order to jump back and forth
-			// on save, and it's a bit unclear why. It's not important to
-			// reload, however, so leaving it like this for now.
-			// invalidatesTags: [invalidatesList(ReduxTag.Stacks)]
 		}),
 		/**
 		 * Note: This is specifically for looking up branches outside of

@@ -1,4 +1,7 @@
-import { transformWorkspaceDetails } from "$lib/stacks/headInfoAdapters";
+import {
+	reorderWorkspaceStacks,
+	transformWorkspaceDetails,
+} from "$lib/stacks/headInfoAdapters";
 import { describe, expect, test } from "vitest";
 import type { Author, Commit, RefInfo, Segment, UpstreamCommit } from "@gitbutler/but-sdk";
 
@@ -150,5 +153,35 @@ describe("headInfoAdapters", () => {
 			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		);
 		expect(result.stackDetails["stack-1"]?.segments[0]?.commits).toEqual([]);
+	});
+
+	test("reorders cached stacks in-place by requested order", () => {
+		const result = transformWorkspaceDetails(
+			refInfo([
+				{
+					id: "stack-1",
+					base: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					segments: [segment()],
+				},
+				{
+					id: "stack-2",
+					base: "cccccccccccccccccccccccccccccccccccccccc",
+					segments: [segment()],
+				},
+				{
+					id: "stack-3",
+					base: "dddddddddddddddddddddddddddddddddddddddd",
+					segments: [segment()],
+				},
+			]),
+		);
+
+		reorderWorkspaceStacks(result, [
+			{ id: "stack-1", order: 2 },
+			{ id: "stack-2", order: 0 },
+			{ id: "stack-3", order: 1 },
+		]);
+
+		expect(result.stacks.ids).toEqual(["stack-2", "stack-3", "stack-1"]);
 	});
 });
