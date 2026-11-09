@@ -130,6 +130,7 @@ export function getStackServiceMock() {
 	StackServiceMock.prototype.legacyUnapplyFiles = vi.fn();
 	StackServiceMock.prototype.legacyUpdateBranchOwnership = vi.fn();
 	StackServiceMock.prototype.legacyUpdateBranchOwnershipMutation = vi.fn();
+	StackServiceMock.prototype.applyWithConfirmation = vi.fn();
 	StackServiceMock.prototype.deleteLocalBranch = vi.fn();
 	StackServiceMock.prototype.markResolved = vi.fn();
 	StackServiceMock.prototype.squashCommits = vi.fn();

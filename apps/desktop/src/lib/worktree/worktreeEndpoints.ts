@@ -102,7 +102,6 @@ export function buildWorktreeEndpoints(build: BackendEndpointBuilder) {
 				command: "assign_hunk",
 			},
 			query: (args) => args,
-			invalidatesTags: [invalidatesList(ReduxTag.WorktreeChanges)],
 		}),
 		resolveWorktreeConflicts: build.mutation<void, { projectId: string; paths: string[] }>({
 			extraOptions: {

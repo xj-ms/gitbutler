@@ -12,7 +12,10 @@ fn hunk_dependencies_for_changes(
     // accelerate tree-tree-diffs
     let repo = repo.clone().for_tree_diffing()?.with_object_memory();
     let input_stacks = crate::new_stacks_to_input_stacks(&repo, workspace)?;
+    let _span = tracing::info_span!("workspace_ranges_from_stacks").entered();
     let ranges = crate::WorkspaceRanges::try_from_stacks(input_stacks)?;
+    drop(_span);
+    let _span = tracing::info_span!("hunk_deps_from_ranges", num_changes = changes.len()).entered();
     HunkDependencies::try_from_workspace_ranges(&repo, ranges, changes)
 }
 
@@ -54,6 +57,11 @@ impl HunkDependencies {
     ) -> anyhow::Result<HunkDependencies> {
         let mut diffs = Vec::<(String, DiffHunk, Vec<HunkLock>)>::new();
         for change in worktree_changes {
+            // Skip computing the worktree unified patch when no workspace commits
+            // modified this path, since `ranges.intersection` cannot match anything.
+            if !ranges.has_path(&change.path) {
+                continue;
+            }
             let unidiff = change.unified_patch(repo, 0 /* zero context lines */)?;
             let Some(UnifiedPatch::Patch { hunks, .. }) = unidiff else {
                 continue;

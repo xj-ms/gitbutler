@@ -109,6 +109,7 @@ fn optional_fields() -> anyhow::Result<()> {
         path_bytes: b"path/to/file.txt".to_vec(),
         stack_id: None,
         branch_ref_bytes: None,
+        previous_path_bytes: None,
     };
 
     let hunk_no_branch = HunkAssignment {
@@ -118,6 +119,7 @@ fn optional_fields() -> anyhow::Result<()> {
         path_bytes: b"path/to/other.txt".to_vec(),
         stack_id: None,
         branch_ref_bytes: None,
+        previous_path_bytes: None,
     };
 
     let hunk_no_id = HunkAssignment {
@@ -127,6 +129,7 @@ fn optional_fields() -> anyhow::Result<()> {
         path_bytes: b"path/to/third.txt".to_vec(),
         stack_id: None,
         branch_ref_bytes: None,
+        previous_path_bytes: None,
     };
 
     db.hunk_assignments_mut()?.set_all(vec![
@@ -155,6 +158,7 @@ fn non_utf8_path_bytes() -> anyhow::Result<()> {
         path_bytes: vec![0xFF, 0xFE, 0xFD, 0x00, 0x80],
         stack_id: None,
         branch_ref_bytes: None,
+        previous_path_bytes: None,
     };
 
     db.hunk_assignments_mut()?
@@ -239,6 +243,26 @@ fn legacy_stack_id_fallback() -> anyhow::Result<()> {
         Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
     );
     assert_eq!(assignments[0].branch_ref_bytes, None);
+    assert_eq!(assignments[0].previous_path_bytes, None);
+
+    Ok(())
+}
+
+#[test]
+fn previous_path_bytes_roundtrip() -> anyhow::Result<()> {
+    let mut db = in_memory_db();
+
+    let mut hunk_renamed = hunk_assignment("id1", Some("@@ -1,3 +1,4 @@"), "new/file.txt", None);
+    hunk_renamed.previous_path_bytes = Some(b"old/file.txt".to_vec());
+    let hunk_normal = hunk_assignment("id2", Some("@@ -10,5 +11,6 @@"), "other.txt", None);
+
+    db.hunk_assignments_mut()?
+        .set_all(vec![hunk_renamed.clone(), hunk_normal.clone()])?;
+
+    let assignments = db.hunk_assignments().list_all()?;
+    assert_eq!(assignments.len(), 2);
+    assert!(assignments.contains(&hunk_renamed));
+    assert!(assignments.contains(&hunk_normal));
 
     Ok(())
 }
@@ -256,5 +280,6 @@ fn hunk_assignment(
         path_bytes: path.as_bytes().to_vec(),
         stack_id: None,
         branch_ref_bytes: branch_ref_bytes.map(|s| s.as_bytes().to_vec()),
+        previous_path_bytes: None,
     }
 }

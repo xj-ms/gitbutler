@@ -15,34 +15,44 @@
 	interface Props {
 		projectId: string;
 		remoteBranches: RemoteBranchInfo[];
+		remoteTags?: RemoteBranchInfo[];
 	}
 
-	const { projectId, remoteBranches }: Props = $props();
+	const { projectId, remoteBranches, remoteTags = [] }: Props = $props();
+
+	const TAG_PREFIX = "refs/tags/";
 
 	const projectsService = inject(PROJECTS_SERVICE);
 	const baseService = inject(BASE_BRANCH_SERVICE);
 	const posthog = inject(POSTHOG_WRAPPER);
 	const settingsStore = inject(SETTINGS_SERVICE).appSettings;
 	const projectQuery = $derived(projectsService.getProject(projectId));
-	const [setBaseBranchTarget] = baseService.setTarget;
-	const [setBaseBranchTargetRef] = baseService.setTargetRef;
+	const [setBaseBranchTarget, targetBranchSwitch] = baseService.setTarget;
+	const [setBaseBranchTargetRef, targetRefSwitch] = baseService.setTargetRef;
+	const settingTarget = $derived(
+		targetBranchSwitch.current.isLoading || targetRefSwitch.current.isLoading,
+	);
 
 	async function setTarget(branch: string[]) {
-		if (!branch[0] || branch[0] === "") return;
+		const target = branch[0];
+		if (!target) return;
+		const isTag = target.startsWith(TAG_PREFIX);
+		const pushRemote = isTag ? undefined : branch[1] || undefined;
 
 		try {
 			if ($settingsStore?.featureFlags.singleBranch) {
 				// Only set the target; the user keeps working on their current branch.
+				const targetRef = isTag ? target : `refs/remotes/${target}`;
 				await setBaseBranchTargetRef({
 					projectId: projectId,
-					targetRef: `refs/remotes/${branch[0]}`,
-					pushRemote: branch[1],
+					targetRef,
+					pushRemote,
 				});
 			} else {
 				await setBaseBranchTarget({
 					projectId: projectId,
-					branch: branch[0],
-					pushRemote: branch[1],
+					branch: target,
+					pushRemote,
 				});
 			}
 			posthog.captureOnboarding(OnboardingEvent.SetTargetBranch);
@@ -67,6 +77,8 @@
 				{projectId}
 				projectName={project.title}
 				{remoteBranches}
+				{remoteTags}
+				loading={settingTarget}
 				onBranchSelected={async (branch) => {
 					await setTarget(branch);
 				}}

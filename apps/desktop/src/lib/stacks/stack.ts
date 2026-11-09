@@ -1,48 +1,7 @@
-import { showWarning } from "$lib/notifications/toasts";
 import { TestId } from "@gitbutler/ui";
 import type { BranchIconName } from "$lib/branches/branchIcon";
 import type { DropResult } from "$lib/dragging/dropResult";
-import type { ApplyOutcome, PushStatus, Segment, Stack as RefInfoStack } from "@gitbutler/but-sdk";
-
-function stackCount(numStacks: number): string {
-	if (numStacks === 1) {
-		return "one stack";
-	} else {
-		return "some stacks";
-	}
-}
-
-function prettyNamedListIfPossible(expectedNames: number, names: string[]): string {
-	// It could happen that not all stacks had names, for now we don't deal with that.
-	// Also, the old codepath doesn't produce names.
-	if (expectedNames !== names.length) {
-		return stackCount(expectedNames);
-	}
-	if (names.length === 0) {
-		return "";
-	} else if (names.length === 1) {
-		return `stack ${names[0]}`;
-	} else if (names.length === 2) {
-		return `stack ${names[0]} and stack ${names[1]}`;
-	}
-
-	const allButLast = names.slice(0, -1);
-	const last = names[names.length - 1];
-
-	return `${allButLast.map((n) => `stack ${n}`).join(", ")}, and stack ${last}`;
-}
-
-export function handleApplyOutcome(outcome: ApplyOutcome) {
-	if (outcome.status !== "conflictAborted") return;
-	const names = outcome.conflictingStacks.map((stack) => stack.shortName);
-	const single = names.length === 1;
-	showWarning(
-		"Couldn't apply branch due to conflicts",
-		`It conflicts with ${prettyNamedListIfPossible(names.length, names) || "another applied stack"}. Unapply ${single ? "it" : "them"} first, then try applying again.`,
-		undefined,
-		TestId.BranchApplyConflictToast,
-	);
-}
+import type { PushStatus, Segment, Stack as RefInfoStack } from "@gitbutler/but-sdk";
 
 export type Stack = RefInfoStack;
 
@@ -147,6 +106,36 @@ export function stackHasUnpushedCommits(stack: Stack): boolean {
 
 export function branchHasUnpushedCommits(branch: Segment): boolean {
 	return requiresPush(branch.pushStatus);
+}
+
+/**
+ * Whether the branch's remote has commits that the local branch does not have,
+ * i.e. there is something upstream to integrate via "Update local branch".
+ *
+ * This is independent of {@link branchRequiresForcePush}: a branch can both
+ * require a force push (rewritten local commits) and have upstream commits, in
+ * which case both the force-push and update actions are offered.
+ */
+export function branchHasUpstreamCommits(branch: Segment): boolean {
+	return branch.commitsOnRemote.length > 0;
+}
+
+/**
+ * Whether the "Update local branch" action should be offered, i.e. the local
+ * branch and its remote have diverged in a way that upstream integration can
+ * reconcile.
+ *
+ * This is true either when the remote has genuinely new commits
+ * ({@link branchHasUpstreamCommits}) or when the branch requires a force push
+ * ({@link branchRequiresForcePush}). The latter covers the case where the
+ * remote holds a rewritten/amended version of a local commit (same change-id,
+ * different SHA): such commits are matched to their local counterpart and thus
+ * excluded from `commitsOnRemote`, yet the branches have still diverged and the
+ * integration flow (which computes divergence from the merge-base) has real
+ * work to do.
+ */
+export function branchCanUpdateFromRemote(branch: Segment): boolean {
+	return branchHasUpstreamCommits(branch) || branchRequiresForcePush(branch);
 }
 
 export function requiresPush(status: PushStatus): boolean {

@@ -405,7 +405,7 @@ mod error {
             )
             .unwrap_err()
             .to_string(),
-            "remote branch 'refs/remotes/origin/missing' not found"
+            "reference 'refs/remotes/origin/missing' not found"
         );
     }
 
@@ -691,5 +691,265 @@ mod behind_count {
             base.behind, 3,
             "behind count should match the farthest-behind stack (A, which is 3 commits behind)"
         );
+    }
+}
+
+mod tags_and_descendant_switch {
+    use super::*;
+
+    fn create_ref(repo: &gix::Repository, name: &str, target: gix::ObjectId) {
+        repo.reference(name, target, PreviousValue::Any, "test ref")
+            .unwrap();
+    }
+
+    /// Create a commit that is a strict child of `parent`, reusing its tree.
+    fn child_commit(repo: &gix::Repository, parent: gix::ObjectId, message: &str) -> gix::ObjectId {
+        let tree_id = repo
+            .find_commit(parent)
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let author = signature_gix(SignaturePurpose::Author);
+        let committer = signature_gix(SignaturePurpose::Committer);
+        commit_without_signature_gix(
+            repo,
+            None,
+            author,
+            committer,
+            message.into(),
+            tree_id,
+            &[parent],
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tag_base_pins_to_tag_commit() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let head_id = repo.open().head_id().unwrap().detach();
+        create_ref(&repo.open(), "refs/tags/v1", head_id);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let base = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v1".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        assert!(base.is_tag);
+        assert_eq!(base.branch_name, "v1");
+        assert_eq!(base.short_name, "v1");
+        assert!(base.remote_name.is_empty());
+
+        let project_meta = ctx.project_meta().unwrap();
+        assert_eq!(
+            project_meta.target_ref.map(|n| n.to_string()),
+            Some("refs/tags/v1".to_string())
+        );
+        assert_eq!(project_meta.target_commit_id, Some(head_id));
+
+        let meta = ctx.meta().unwrap();
+        let ref_info = but_workspace::head_info(
+            &*ctx.repo.get().unwrap(),
+            &meta,
+            &mut *ctx.db.get_cache_mut().unwrap(),
+            but_workspace::ref_info::Options {
+                project_meta: ctx.project_meta().unwrap(),
+                traversal: but_graph::init::Options::limited(),
+                expensive_commit_info: false,
+                gerrit_mode: but_workspace::ref_info::GerritMode::Disabled,
+            },
+        )
+        .unwrap();
+        let ui_ref_info = but_workspace::ui::RefInfo::try_from(ref_info).unwrap();
+        let target = ui_ref_info
+            .target
+            .expect("tag target must be present in UI RefInfo");
+        assert_eq!(target.remote_tracking_ref.display_name, "v1");
+        assert!(target.remote_tracking_ref.remote_name.is_empty());
+        assert_eq!(target.remote_tracking_ref.full_name_bytes, "refs/tags/v1");
+    }
+
+    #[test]
+    fn tag_base_from_detached_head() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let head_id = repo.open().head_id().unwrap().detach();
+        create_ref(&repo.open(), "refs/tags/v1", head_id);
+
+        // Detach HEAD onto the tag commit (as when a repo is checked out at a tag).
+        repo.checkout_commit(head_id);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let base = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v1".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        assert!(base.is_tag, "target must be marked as a tag");
+        assert_eq!(base.branch_name, "v1", "branch_name must be the tag name");
+        assert!(
+            stack_details(ctx).is_empty(),
+            "no stack is created when detached HEAD matches the tag commit"
+        );
+
+        // Also verify detached HEAD with extra commits and uncommitted changes creates a canned
+        // stack and preserves the uncommitted worktree changes.
+        let Test { repo, ctx, .. } = &mut Test::default();
+        let base_id = repo.open().head_id().unwrap().detach();
+        create_ref(&repo.open(), "refs/tags/v1", base_id);
+        let child_id = child_commit(&repo.open(), base_id, "detached work");
+        repo.checkout_commit(child_id);
+        std::fs::write(repo.path().join("file.txt"), "uncommitted modification").unwrap();
+        std::fs::write(repo.path().join("untracked.txt"), "new untracked file").unwrap();
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let base = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v1".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        assert!(base.is_tag, "target must be marked as a tag");
+        assert_eq!(
+            stack_details(ctx).len(),
+            1,
+            "detached HEAD ahead of the tag must be adopted into a canned stack"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("file.txt")).unwrap(),
+            "uncommitted modification",
+            "modified tracked file must be preserved in the worktree"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("untracked.txt")).unwrap(),
+            "new untracked file",
+            "untracked file must be preserved in the worktree"
+        );
+        let worktree_changes = but_core::diff::worktree_changes(&*ctx.repo.get().unwrap())
+            .unwrap()
+            .changes;
+        assert_eq!(
+            worktree_changes.len(),
+            2,
+            "both uncommitted changes must remain visible in the workspace"
+        );
+    }
+
+    #[test]
+    fn descendant_switch_with_applied_stack_repoints_target() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let base_commit = repo.open().head_id().unwrap().detach();
+
+        repo.checkout(&"refs/heads/some-feature".parse().unwrap());
+        std::fs::write(repo.path().join("stacked.txt"), "content").unwrap();
+        repo.commit_all("stacked");
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch(
+            ctx,
+            &"refs/remotes/origin/master".parse().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        let initial_stacks = stack_details(ctx);
+        assert_eq!(initial_stacks.len(), 1);
+        let stack_id = initial_stacks[0].0;
+
+        // A tag that is a strict descendant of the current base.
+        let descendant = child_commit(&repo.open(), base_commit, "descendant");
+        create_ref(&repo.open(), "refs/tags/v2", descendant);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/v2".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        let project_meta = ctx.project_meta().unwrap();
+        assert_eq!(
+            project_meta.target_ref.map(|n| n.to_string()),
+            Some("refs/tags/v2".to_string()),
+            "the target ref is re-pointed to the descendant tag"
+        );
+        assert_eq!(
+            project_meta.target_commit_id,
+            Some(base_commit),
+            "the pinned base commit is kept; the new commits surface as upstream work"
+        );
+        // The applied stack is preserved across the switch.
+        let stacks = stack_details(ctx);
+        assert_eq!(stacks.len(), 1);
+        assert_eq!(stacks[0].0, stack_id);
+    }
+
+    #[test]
+    fn non_descendant_switch_with_applied_stack_is_blocked() {
+        let Test { repo, ctx, .. } = &mut Test::default();
+
+        let base_commit = repo.open().head_id().unwrap().detach();
+
+        repo.checkout(&"refs/heads/some-feature".parse().unwrap());
+        std::fs::write(repo.path().join("stacked.txt"), "content").unwrap();
+        repo.commit_all("stacked");
+
+        let mut guard = ctx.exclusive_worktree_access();
+        gitbutler_branch_actions::set_base_branch(
+            ctx,
+            &"refs/remotes/origin/master".parse().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap();
+        drop(guard);
+
+        // A tag pointing at an orphan commit that shares no history with the base,
+        // so it is not a descendant and the switch must be rejected.
+        let base_tree = repo
+            .open()
+            .find_commit(base_commit)
+            .unwrap()
+            .tree_id()
+            .unwrap()
+            .detach();
+        let author = signature_gix(SignaturePurpose::Author);
+        let committer = signature_gix(SignaturePurpose::Committer);
+        let orphan = commit_without_signature_gix(
+            &repo.open(),
+            None,
+            author,
+            committer,
+            "orphan".into(),
+            base_tree,
+            &[],
+            None,
+        )
+        .unwrap();
+        create_ref(&repo.open(), "refs/tags/other", orphan);
+
+        let mut guard = ctx.exclusive_worktree_access();
+        let err = gitbutler_branch_actions::set_base_branch_ref(
+            ctx,
+            &"refs/tags/other".try_into().unwrap(),
+            guard.write_permission(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("not a descendant"), "unexpected error: {err}");
     }
 }

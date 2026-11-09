@@ -158,8 +158,11 @@ fn args_to_tips(repo: &gix::Repository, graph_args: &RevisionGraphArgs) -> Resul
                 .with_context(|| format!("Failed to find target ref '{target_ref}'"))?;
             let name = reference.name().to_owned();
             ensure!(
-                name.category() == Some(Category::RemoteBranch),
-                "Target ref '{name}' resolved from '{target_ref}' is not a remote-tracking branch; use --extra-target for arbitrary revisions"
+                matches!(
+                    name.category(),
+                    Some(Category::RemoteBranch | Category::Tag)
+                ),
+                "Target ref '{name}' resolved from '{target_ref}' is not a remote-tracking branch or tag; use --extra-target for arbitrary revisions"
             );
             let id = reference.peel_to_id()?.detach();
             Ok(Tip::integrated(id, Some(name)))

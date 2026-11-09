@@ -348,6 +348,11 @@
 		flex-direction: column;
 		margin-top: -4px;
 		background-color: var(--bg-1);
+
+		:global(.dependency-highlighted > .file-list-item) {
+			animation: dependency-pulse 4s ease forwards;
+			transition: background-color var(--transition-fast);
+		}
 	}
 
 	.gerrit-review-pill {

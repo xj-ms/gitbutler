@@ -329,6 +329,17 @@ impl ProjectMeta {
         let (category, short_name) = target_ref
             .category_and_short_name()
             .with_context(|| format!("failed to determine remote for branch {target_ref}"))?;
+        if category == gix::refs::Category::Tag {
+            if let Some(default_remote) =
+                repo.remote_default_name(gix::remote::Direction::Push)
+            {
+                return Ok(default_remote.to_str_lossy().into_owned());
+            }
+            bail!(
+                "failed to determine push remote for tag target '{}' (configure one with `but config push-remote <remote>`)",
+                target_ref.shorten()
+            );
+        }
         if category != gix::refs::Category::RemoteBranch {
             bail!("failed to determine remote for non remote-tracking branch {target_ref}");
         }
@@ -412,12 +423,17 @@ impl ProjectMeta {
     pub fn try_from_config(config: &gix::config::File) -> anyhow::Result<Self> {
         let target_ref = config.string(PROJECT_TARGET_REF).and_then(|value| {
             match gix::refs::FullName::try_from(value.as_bstr()) {
-                Ok(name) if name.category() == Some(gix::refs::Category::RemoteBranch) => {
+                Ok(name)
+                    if matches!(
+                        name.category(),
+                        Some(gix::refs::Category::RemoteBranch | gix::refs::Category::Tag)
+                    ) =>
+                {
                     Some(name)
                 }
                 Ok(name) => {
                     tracing::warn!(
-                        "ignoring {PROJECT_TARGET_REF}: target ref {name} is not a remote tracking branch"
+                        "ignoring {PROJECT_TARGET_REF}: target ref {name} is not a remote tracking branch or tag"
                     );
                     None
                 }

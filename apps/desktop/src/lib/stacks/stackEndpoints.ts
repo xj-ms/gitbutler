@@ -269,10 +269,6 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				actionName: "Update Stack Order",
 			},
 			query: (args) => args,
-			// This invalidation causes the order to jump back and forth
-			// on save, and it's a bit unclear why. It's not important to
-			// reload, however, so leaving it like this for now.
-			// invalidatesTags: [invalidatesList(ReduxTag.Stacks)]
 		}),
 		/**
 		 * Note: This is specifically for looking up branches outside of
@@ -926,6 +922,31 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				invalidatesList(ReduxTag.BranchListing),
 				invalidatesList(ReduxTag.PullRequests),
 			],
+		}),
+		applyWithConfirmation: build.mutation<
+			ApplyOutcome,
+			{
+				projectId: string;
+				existingBranch: string;
+				prNumber?: number;
+				unapplyConflictingStacks: string[];
+			}
+		>({
+			extraOptions: {
+				command: "apply_with_confirmation",
+				actionName: "Apply Branch",
+			},
+			query: (args) => args,
+			invalidatesTags: (result) =>
+				result?.status === "applied"
+					? [
+							invalidatesList(ReduxTag.HeadSha),
+							invalidatesList(ReduxTag.BranchListing),
+							invalidatesList(ReduxTag.Stacks),
+							invalidatesList(ReduxTag.StackDetails),
+							invalidatesList(ReduxTag.WorktreeChanges),
+						]
+					: [],
 		}),
 		deleteLocalBranch: build.mutation<
 			void,

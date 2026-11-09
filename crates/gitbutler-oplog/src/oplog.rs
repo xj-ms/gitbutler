@@ -93,8 +93,11 @@ impl TryFrom<SnapshotProjectMeta> for ProjectMeta {
                 let name: gix::refs::FullName = name
                     .try_into()
                     .context("invalid targetRef in project_meta.toml")?;
-                if name.category() != Some(gix::refs::Category::RemoteBranch) {
-                    bail!("targetRef in project_meta.toml is not a remote-tracking branch");
+                if !matches!(
+                    name.category(),
+                    Some(gix::refs::Category::RemoteBranch | gix::refs::Category::Tag)
+                ) {
+                    bail!("targetRef in project_meta.toml is not a remote-tracking branch or tag");
                 }
                 Ok(name)
             })
@@ -463,10 +466,13 @@ fn reset_index_to_tree(
     ctx: &Context,
     tree_id: gix::ObjectId,
     conflicts_tree_id: Option<gix::ObjectId>,
+    pre_checkout_index: &gix::index::State,
 ) -> Result<()> {
     let repo = ctx.repo.get()?;
+    let post_checkout_index = repo.index_or_empty()?;
     let tree = repo.find_tree(tree_id)?;
     let mut index = repo.index_from_tree(&tree.id())?;
+    preserve_index_stat(&mut index, &post_checkout_index, pre_checkout_index);
     if let Some(conflicts_tree_id) = conflicts_tree_id {
         restore_index_conflicts(&mut index, repo.find_tree(conflicts_tree_id)?.id())?;
     }
@@ -475,6 +481,38 @@ fn reset_index_to_tree(
     #[expect(deprecated, reason = "index cache compatibility boundary")]
     ctx.git2_repo.get()?.index()?.read(true)?;
     Ok(())
+}
+
+#[expect(clippy::indexing_slicing)]
+fn preserve_index_stat(
+    index: &mut gix::index::State,
+    post_checkout_index: &gix::index::State,
+    pre_checkout_index: &gix::index::State,
+) {
+    let default_stat = gix::index::entry::Stat::default();
+    for post_entry in post_checkout_index.entries() {
+        if post_entry.flags.stage() != Stage::Unconflicted {
+            continue;
+        }
+        let path = post_entry.path(post_checkout_index);
+        let Some(pos) = index.entry_index_by_path_and_stage(path, Stage::Unconflicted) else {
+            continue;
+        };
+        let entry = &mut index.entries_mut()[pos];
+        if entry.id != post_entry.id || entry.mode != post_entry.mode {
+            continue;
+        }
+        if post_entry.stat != default_stat {
+            entry.stat = post_entry.stat;
+        } else if let Some(pre_entry) =
+            pre_checkout_index.entry_by_path_and_stage(path, Stage::Unconflicted)
+            && pre_entry.id == entry.id
+            && pre_entry.mode == entry.mode
+            && pre_entry.stat != default_stat
+        {
+            entry.stat = pre_entry.stat;
+        }
+    }
 }
 
 #[expect(clippy::indexing_slicing)]
@@ -1137,6 +1175,7 @@ fn restore_snapshot(
 
     let gix_repo = ctx.clone_repo_for_merging()?;
     let workdir_tree_id = get_workdir_tree(None, snapshot_commit_id, &gix_repo)?;
+    let pre_checkout_index = repo.index_or_empty()?;
 
     // Check out the snapshot's worktree while HEAD still points at the pre-restore commit:
     // safe_checkout diffs from `before_restore_snapshot_workdir_tree_id`, so
@@ -1215,7 +1254,12 @@ fn restore_snapshot(
     let index_conflicts_tree_id = snapshot_tree
         .lookup_entry_by_path("index-conflicts")?
         .map(|entry| entry.id().detach());
-    reset_index_to_tree(ctx, index_tree_entry.id().detach(), index_conflicts_tree_id)?;
+    reset_index_to_tree(
+        ctx,
+        index_tree_entry.id().detach(),
+        index_conflicts_tree_id,
+        &pre_checkout_index,
+    )?;
 
     if let Some(checkout) = restored_checkout {
         if checkout.ref_name != workspace_ref {

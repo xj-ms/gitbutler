@@ -75,6 +75,7 @@
 	const dragStateService = inject(DRAG_STATE_SERVICE);
 	const stackService = inject(STACK_SERVICE);
 	const uiState = inject(UI_STATE);
+	const stacksQuery = $derived(stackService.stacks(projectId));
 
 	let contextMenu = $state<ReturnType<typeof ChangedFilesContextMenu>>();
 	let draggableEl: HTMLDivElement | undefined = $state();
@@ -113,7 +114,7 @@
 	const lockText = $derived.by(() => {
 		if (!locked || lockedTargets.length === 0) return undefined;
 
-		const stacks = stackService.stacks(projectId).result.data ?? [];
+		const stacks = stacksQuery.result.data ?? [];
 		const stackNames = stacks
 			.filter(
 				(stack) =>
@@ -132,7 +133,7 @@
 	});
 
 	function handleLockHover() {
-		clearLockHighlight = highlightDependencyCommitRows(lockedCommitIds);
+		clearLockHighlight = highlightDependencyCommitRows(lockedCommitIds, change.path);
 	}
 
 	function handleLockUnhover() {
@@ -145,6 +146,7 @@
 
 <div
 	data-testid={TestId.FileListItem}
+	data-file-path={change.path}
 	class="filelistitem-wrapper"
 	data-remove-from-panning
 	bind:this={draggableEl}

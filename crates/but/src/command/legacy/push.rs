@@ -219,14 +219,21 @@ fn handle_dry_run(
     // Limit the shared lock to target resolution before continuing with dry-run analysis.
     let fallback_remote = {
         let guard = ctx.shared_worktree_access();
-        workspace_target::ResolvedTarget::resolve_with_perm(ctx, guard.read_permission())?
-            .push_remote_name()
-            .map(str::to_owned)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Failed to determine push remote for dry-run push: workspace target has no push remote."
-                )
-            })?
+        let resolved_remote = workspace_target::ResolvedTarget::resolve_with_perm(
+            ctx,
+            guard.read_permission(),
+        )?
+        .push_remote_name()
+        .map(str::to_owned);
+        match resolved_remote {
+            Some(remote) => remote,
+            None => {
+                let repo = ctx.repo.get()?;
+                ctx.project_meta()?
+                    .push_remote_name(&repo)
+                    .context("Failed to determine push remote for dry-run push: workspace target has no push remote.")?
+            }
+        }
     };
     let repo = ctx.repo.get()?.clone().for_commit_shortening();
     let remote_names = repo.remote_names();

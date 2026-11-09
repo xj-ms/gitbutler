@@ -523,7 +523,7 @@ CREATE TABLE `hunk_assignments`(
 	`path` TEXT NOT NULL,
 	`path_bytes` BINARY NOT NULL,
 	`stack_id` TEXT,
-	`id` TEXT, `branch_ref` BINARY,
+	`id` TEXT, `branch_ref` BINARY, `previous_path_bytes` BINARY,
 	PRIMARY KEY(`path`, `hunk_header`)
 );
 
@@ -680,9 +680,10 @@ Text("20260715120000")
 Text("20260715161258")
 Text("20260716175500")
 Text("20260805120000")
+Text("20261018120000")
 
 Table: hunk_assignments
-hunk_header | path | path_bytes | stack_id | id | branch_ref
+hunk_header | path | path_bytes | stack_id | id | branch_ref | previous_path_bytes
 
 Table: butler_actions
 id | created_at | handler | snapshot_before | snapshot_after | response | error | external_summary | external_prompt | source

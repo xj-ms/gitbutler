@@ -26,6 +26,9 @@ use tauri_plugin_log::{Target, TargetKind};
 
 fn main() -> anyhow::Result<()> {
     but_api::panic_capture::install_panic_hook();
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    gitbutler_tauri::debug_console::initialize();
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -95,7 +98,6 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&app_data_dir).context("failed to create app data dir")?;
     std::fs::create_dir_all(&app_cache_dir).context("failed to create app cache dir")?;
     std::fs::create_dir_all(&app_log_dir).context("failed to create app log dir")?;
-
     let tokio_debug = matches!(std::env::var("GITBUTLER_TOKIO_DEBUG").as_deref(), Ok("1"));
     runtime.block_on(async {
         tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -128,6 +130,8 @@ fn main() -> anyhow::Result<()> {
                 let app_handle = tauri_app.handle();
 
                 logs::init(app_handle, &app_log_dir, performance_logging, tokio_debug);
+                #[cfg(all(target_os = "windows", debug_assertions))]
+                gitbutler_tauri::debug_console::hide_at_startup();
 
                 but_action::cli::auto_fix_broken_but_cli_symlink();
                 inherit_interactive_login_shell_environment_if_not_launched_from_terminal();
@@ -238,12 +242,14 @@ fn main() -> anyhow::Result<()> {
                 workspace::tauri_set_target_ref_and_init_project::set_target_ref_and_init_project,
                 workspace::tauri_resolve_worktree_conflicts::resolve_worktree_conflicts,
                 but_api::branch::tauri_branch_diff::branch_diff,
+                but_api::branch::tauri_apply_with_confirmation::apply_with_confirmation,
                 but_api::branch::tauri_move_branch::move_branch,
                 but_api::branch::tauri_tear_off_branch::tear_off_branch,
                 but_api::branch::tauri_branch_remove::branch_remove,
                 but_api::branch::tauri_branch_create::branch_create,
                 but_api::branch::tauri_branch_rename::branch_rename,
                 legacy::git::tauri_git_remote_branches::git_remote_branches,
+                legacy::git::tauri_git_tags::git_tags,
                 legacy::git::tauri_delete_all_data::delete_all_data,
                 legacy::git::tauri_git_set_global_config::git_set_global_config,
                 legacy::git::tauri_git_remove_global_config::git_remove_global_config,
@@ -309,6 +315,7 @@ fn main() -> anyhow::Result<()> {
                 legacy::modes::tauri_abort_edit_and_return_to_workspace::abort_edit_and_return_to_workspace,
                 legacy::modes::tauri_edit_initial_index_state::edit_initial_index_state,
                 legacy::modes::tauri_edit_changes_from_initial::edit_changes_from_initial,
+                but_api::open::tauri_open_in_program::open_in_program,
                 open::tauri_open_url::open_url,
                 open::tauri_open_in_terminal::open_in_terminal,
                 open::tauri_show_in_finder::show_in_finder,

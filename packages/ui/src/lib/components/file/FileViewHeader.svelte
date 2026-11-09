@@ -7,6 +7,7 @@
 	import FileName from "$components/file/FileName.svelte";
 	import FileStatusBadge from "$components/file/FileStatusBadge.svelte";
 	import type { FileStatus } from "$components/file/types";
+	import type { Snippet } from "svelte";
 
 	interface Props {
 		id?: string;
@@ -23,6 +24,8 @@
 		class?: string;
 		oncontextmenu?: (e: MouseEvent) => void;
 		oncloseclick?: () => void;
+		/** Extra controls rendered at the end of the header, before the close button. */
+		actions?: Snippet;
 	}
 
 	const {
@@ -40,6 +43,7 @@
 		class: className,
 		oncontextmenu,
 		oncloseclick,
+		actions,
 	}: Props = $props();
 </script>
 
@@ -84,6 +88,8 @@
 			<Badge size="icon" style="danger">Has conflicts</Badge>
 		{/if}
 	</div>
+
+	{@render actions?.()}
 
 	{#if oncloseclick}
 		<Button

@@ -10,6 +10,7 @@
 <script lang="ts">
 	import FilePreviewPlaceholder from "$components/diff/FilePreviewPlaceholder.svelte";
 	import FloatingDiffModal from "$components/diff/FloatingDiffModal.svelte";
+	import IgnoreWhitespaceButton from "$components/diff/IgnoreWhitespaceButton.svelte";
 	import UnifiedDiffView from "$components/diff/UnifiedDiffView.svelte";
 	import ChangedFilesContextMenu from "$components/shared/ChangedFilesContextMenu.svelte";
 	import Drawer from "$components/shared/Drawer.svelte";
@@ -139,6 +140,7 @@
 		{/snippet}
 
 		{#snippet actions()}
+			<IgnoreWhitespaceButton />
 			<Button
 				kind="ghost"
 				icon="kebab"

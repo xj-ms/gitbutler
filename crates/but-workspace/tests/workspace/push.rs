@@ -382,3 +382,70 @@ fn force_push_protection_is_observed_when_pushing_top_branch() -> anyhow::Result
 
     Ok(())
 }
+
+#[test]
+fn push_works_when_target_ref_is_a_tag() -> anyhow::Result<()> {
+    let (_tmp, repo, meta) = fixture("push")?;
+    let base_id = repo.rev_parse_single("main")?.detach();
+    repo.reference(
+        "refs/tags/v1.0.0",
+        base_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "test",
+    )?;
+    let tag_project_meta = ProjectMeta {
+        target_ref: Some("refs/tags/v1.0.0".try_into()?),
+        target_commit_id: Some(base_id),
+        push_remote: None,
+    };
+
+    let (info, workspace) = but_workspace::head_info_and_workspace(
+        &repo,
+        &meta,
+        &mut but_testsupport::project_db(&repo)?,
+        Options {
+            project_meta: tag_project_meta.clone(),
+            expensive_commit_info: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(status(&info, "solo"), CompletelyUnpushed);
+
+    let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+    let result = but_workspace::legacy::workspace_branch_and_ancestors_push(
+        &repo,
+        &workspace,
+        &tag_project_meta,
+        &info,
+        &mut db,
+        false,
+        false,
+        false,
+        false,
+        r("refs/heads/solo"),
+        false,
+        false,
+        Vec::new(),
+    )?;
+    assert_eq!(result.remote, "origin");
+    apply_remote_tracking_updates(&repo, &result)?;
+
+    let (info_after, _) = but_workspace::head_info_and_workspace(
+        &repo,
+        &meta,
+        &mut but_testsupport::project_db(&repo)?,
+        Options {
+            project_meta: tag_project_meta,
+            expensive_commit_info: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        status(&info_after, "solo"),
+        NothingToPush,
+        "remote-tracking branch should be deduced from default remote even when target_ref is a tag"
+    );
+
+    Ok(())
+}
+

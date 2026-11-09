@@ -185,7 +185,7 @@ export function initDependencies(args: {
 	// ============================================================================
 
 	const fileService = new FileService(backend, clientState.backendApi);
-	const diffService = new DiffService(clientState.backendApi);
+	const diffService = new DiffService(clientState.backendApi, clientState.dispatch);
 
 	// ============================================================================
 	// HISTORY & OPERATIONS

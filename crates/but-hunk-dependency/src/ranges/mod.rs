@@ -140,6 +140,11 @@ impl WorkspaceRanges {
         })
     }
 
+    /// Returns `true` if there are any committed hunk ranges recorded for `path`.
+    pub fn has_path(&self, path: &BString) -> bool {
+        self.paths.contains_key(path)
+    }
+
     /// Finds commits that intersect with a given path and hunk.
     ///
     /// For `Modification`-type commit ranges that only *touch* (are adjacent to, but don't

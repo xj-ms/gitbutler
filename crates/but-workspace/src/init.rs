@@ -72,7 +72,7 @@ fn is_existing_branch_on_remote(
 /// The target commit id is only computed - as the merge-base between `HEAD` and
 /// `target_ref` - if it isn't already set; an existing value is never overwritten.
 /// `push_remote`, if `Some`, is validated and stored; if `None`, an existing push remote
-/// is kept as is.
+/// is kept as is (or cleared for a tag target).
 ///
 /// Unlike `set_base_branch()`, this neither creates stacks, nor updates the workspace
 /// commit, nor checks anything out. The caller is expected to hold exclusive worktree
@@ -86,41 +86,53 @@ pub fn set_target_ref_and_init_project(
     let repaired =
         but_core::ref_metadata::repair_target_metadata_for_migration(&project_meta, repo);
 
-    if target_ref.category() != Some(gix::refs::Category::RemoteBranch) {
+    let is_tag = target_ref.category() == Some(gix::refs::Category::Tag);
+    if !matches!(
+        target_ref.category(),
+        Some(gix::refs::Category::RemoteBranch | gix::refs::Category::Tag)
+    ) {
         bail!(
-            "target ref '{}' must be a remote tracking branch",
+            "target ref '{}' must be a remote tracking branch or a tag",
             target_ref.as_bstr()
         );
     }
 
     let target_head = repo
         .try_find_reference(target_ref)?
-        .with_context(|| format!("remote branch '{}' not found", target_ref.as_bstr()))?
+        .with_context(|| {
+            if is_tag {
+                format!("tag '{}' not found", target_ref.as_bstr())
+            } else {
+                format!("remote branch '{}' not found", target_ref.as_bstr())
+            }
+        })?
         .peel_to_commit()
-        .with_context(|| format!("failed to peel branch '{}' to commit", target_ref.as_bstr()))?
+        .with_context(|| format!("failed to peel '{}' to commit", target_ref.as_bstr()))?
         .id;
 
-    // Reject targets whose remote isn't configured - reads like the base-branch data
-    // would fail on them later.
-    let remote_names = repo.remote_names();
-    let (remote_name, _short_name) =
-        but_core::extract_remote_name_and_short_name(target_ref, &remote_names).with_context(
-            || {
+    if !is_tag {
+        // Reject targets whose remote isn't configured - reads like the base-branch data
+        // would fail on them later.
+        let remote_names = repo.remote_names();
+        let (remote_name, _short_name) =
+            but_core::extract_remote_name_and_short_name(target_ref, &remote_names).with_context(
+                || {
+                    format!(
+                        "failed to determine remote for branch '{}'",
+                        target_ref.as_bstr()
+                    )
+                },
+            )?;
+        repo.find_remote(remote_name.as_str())
+            .with_context(|| {
                 format!(
-                    "failed to determine remote for branch '{}'",
+                    "failed to find remote for branch '{}'",
                     target_ref.as_bstr()
                 )
-            },
-        )?;
-    repo.find_remote(remote_name.as_str())
-        .with_context(|| {
-            format!(
-                "failed to find remote for branch '{}'",
-                target_ref.as_bstr()
-            )
-        })?
-        .url(gix::remote::Direction::Fetch)
-        .with_context(|| format!("failed to get remote url for '{remote_name}'"))?;
+            })?
+            .url(gix::remote::Direction::Fetch)
+            .with_context(|| format!("failed to get remote url for '{remote_name}'"))?;
+    }
 
     let sha = match repaired.target_commit_id {
         Some(existing) => existing,
