@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
 	import { BACKEND } from "$lib/backend";
+	import { VISUAL_STUDIO_EDITOR_ID } from "$lib/backend/editor";
 	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { vscodePath } from "$lib/project/project";
@@ -23,6 +24,21 @@
 	const shortcutService = inject(SHORTCUT_SERVICE);
 	const fileService = inject(FILE_SERVICE);
 
+	$effect(() => {
+		if (backend.platformName !== "windows") return;
+
+		const enabled =
+			uiState.global.defaultCodeEditor.current.schemeIdentifer !== VISUAL_STUDIO_EDITOR_ID;
+		void backend
+			.invoke("menu_item_set_enabled", {
+				id: "project/open-in-vscode",
+				enabled,
+			})
+			.catch((error: unknown) => {
+				console.error("Failed to update Open in Editor menu state", error);
+			});
+	});
+
 	$effect(() =>
 		mergeUnlisten(
 			shortcutService.on("project-settings", () => {
@@ -32,6 +48,9 @@
 				goto(historyPath(projectId));
 			}),
 			shortcutService.on("open-in-vscode", async () => {
+				if (uiState.global.defaultCodeEditor.current.schemeIdentifer === VISUAL_STUDIO_EDITOR_ID) {
+					return;
+				}
 				const project = await projectsService.fetchProject(projectId);
 				if (!project) {
 					throw new Error(`Project not found: ${projectId}`);

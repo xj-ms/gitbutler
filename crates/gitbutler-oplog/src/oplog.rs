@@ -508,8 +508,9 @@ fn write_index_trees(ctx: &Context) -> Result<IndexTrees> {
 }
 
 /// Write the index from `tree_id`, keeping the stat of entries that are unchanged from
-/// `previous`, like `git reset` does. Without it, every later status would read and hash
-/// every tracked file to learn that it didn't change.
+/// `previous` or freshly written by `safe_checkout_from_head` in `post_checkout_index`, like
+/// `git reset` does. Without it, every later status would read and hash every tracked file to
+/// learn that it didn't change.
 fn reset_index_to_tree(
     ctx: &Context,
     tree_id: gix::ObjectId,
@@ -517,24 +518,15 @@ fn reset_index_to_tree(
     previous: &gix::index::State,
 ) -> Result<()> {
     let repo = ctx.repo.get()?;
+    let post_checkout_index = repo.index_or_empty()?;
     let tree = repo.find_tree(tree_id)?;
     let mut index = repo.index_from_tree(&tree.id())?;
-    let stat_options = repo.stat_options()?;
-    for (entry, path) in index.entries_mut_with_paths() {
-        let Some(prev) = previous
-            .entry_by_path_and_stage(path, Stage::Unconflicted)
-            .filter(|prev| prev.id == entry.id && prev.mode == entry.mode)
-        else {
-            continue;
-        };
-        // A sparse checkout's files outside it stay marked, or they'd show as deleted.
-        if prev.flags.contains(Flags::SKIP_WORKTREE) {
-            entry.flags |= Flags::EXTENDED | Flags::SKIP_WORKTREE;
-        }
-        if !prev.stat.is_racy(previous.timestamp(), stat_options) {
-            entry.stat = prev.stat;
-        }
-    }
+    preserve_index_stat(
+        &mut index,
+        &post_checkout_index,
+        previous,
+        repo.stat_options()?,
+    );
     if let Some(conflicts_tree_id) = conflicts_tree_id {
         restore_index_conflicts(&mut index, repo.find_tree(conflicts_tree_id)?.id())?;
     }
@@ -543,6 +535,61 @@ fn reset_index_to_tree(
     #[expect(deprecated, reason = "index cache compatibility boundary")]
     ctx.git2_repo.get()?.index()?.read(true)?;
     Ok(())
+}
+
+/// Preserve `.git/index` flags and stat cache across `reset_index_to_tree` without introducing
+/// racy-git hazards:
+///
+/// 1. **Untouched entries (`previous`):** If an entry in `previous` (captured before checkout at
+///    timestamp $T_0$) was modified in the same timestamp tick ($mtime \ge T_0$), Git treats it as
+///    racy and re-hashes the file on the next status check. Blindly copying that `prev.stat` into
+///    a newly written index at $T_1 > T_0$ would make $mtime < T_1$, turning a racy entry into a
+///    falsely trusted clean entry. Therefore, `prev.stat` is only reused when
+///    `!prev.stat.is_racy(previous.timestamp(), stat_options)`.
+/// 2. **Entries freshly written by `safe_checkout_from_head` (`post_checkout_index`):** When
+///    `safe_checkout_from_head` writes a restored file to disk while holding exclusive worktree
+///    access, it records the placed file's stat in `post_checkout_index` (so either `previous` did
+///    not have the same `(id, mode)` or `post_entry.stat != prev.stat`). When `post_entry` matches
+///    `(entry.id, entry.mode)`, the worktree file was just written from that exact blob during this
+///    restore, and any edit after `reset_index_to_tree` writes the final index at $T_1$ will either
+///    share tick $T_1$ (remaining racy relative to the new index timestamp) or have a later
+///    $mtime > T_1 \ge \text{post\_entry.stat.mtime}$.
+fn preserve_index_stat(
+    index: &mut gix::index::State,
+    post_checkout_index: &gix::index::State,
+    previous: &gix::index::State,
+    stat_options: gix::index::entry::stat::Options,
+) {
+    let default_stat = gix::index::entry::Stat::default();
+    let prev_timestamp = previous.timestamp();
+    for (entry, path) in index.entries_mut_with_paths() {
+        let prev = previous
+            .entry_by_path_and_stage(path, Stage::Unconflicted)
+            .filter(|prev| prev.id == entry.id && prev.mode == entry.mode);
+        if let Some(prev) = prev {
+            // A sparse checkout's files outside it stay marked, or they'd show as deleted.
+            if prev.flags.contains(Flags::SKIP_WORKTREE) {
+                entry.flags |= Flags::EXTENDED | Flags::SKIP_WORKTREE;
+            }
+        }
+
+        let post = post_checkout_index
+            .entry_by_path_and_stage(path, Stage::Unconflicted)
+            .filter(|post| {
+                post.id == entry.id && post.mode == entry.mode && post.stat != default_stat
+            });
+
+        if let Some(post) = post
+            && prev.is_none_or(|prev| post.stat != prev.stat)
+        {
+            entry.stat = post.stat;
+        } else if let Some(prev) = prev
+            && prev.stat != default_stat
+            && !prev.stat.is_racy(prev_timestamp, stat_options)
+        {
+            entry.stat = prev.stat;
+        }
+    }
 }
 
 #[expect(clippy::indexing_slicing)]

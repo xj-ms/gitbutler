@@ -418,6 +418,77 @@ fn force_push_protection_is_observed_when_pushing_bottom_branch() -> anyhow::Res
 }
 
 #[test]
+fn workspace_push_all_persists_tracking_branch_and_pushes_workspace_plus_out_of_sync_branches()
+-> anyhow::Result<()> {
+    let (_tmp, repo, meta) = fixture("push")?;
+
+    // First push `bottom` so it is already up to date on the remote, leaving `middle`, `top`, and `solo` out of sync.
+    let bottom_result = push(&repo, &meta, r("refs/heads/bottom"), false, false, false)?;
+    apply_remote_tracking_updates(&repo, &bottom_result)?;
+
+    let (info, workspace) = head_info(&repo, &meta)?;
+    assert_eq!(status(&info, "bottom"), NothingToPush);
+    assert_eq!(status(&info, "middle"), CompletelyUnpushed);
+    assert_eq!(status(&info, "top"), CompletelyUnpushed);
+    assert_eq!(status(&info, "solo"), CompletelyUnpushed);
+
+    let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+    let result = but_workspace::legacy::push::workspace_push_all(
+        &repo,
+        &workspace,
+        &project_meta(&repo)?,
+        &info,
+        &mut db,
+        false,
+        "workspace-sync",
+        false,
+        false,
+        false,
+        false,
+        Vec::new(),
+    )?;
+
+    assert_eq!(result.remote, "origin");
+    assert_eq!(
+        result
+            .branch_to_remote
+            .iter()
+            .map(|(branch, remote_ref, remote_branch)| (
+                branch.as_str(),
+                remote_ref.to_string(),
+                remote_branch.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "gitbutler/workspace",
+                "refs/remotes/origin/workspace-sync".to_string(),
+                "workspace-sync"
+            ),
+            ("solo", "refs/remotes/origin/solo".to_string(), "solo"),
+            ("middle", "refs/remotes/origin/middle".to_string(), "middle"),
+            ("top", "refs/remotes/origin/top".to_string(), "top"),
+        ]
+    );
+
+    // Reopen repo to verify persisted config and ensure `head_info` still succeeds with workspace tracking configured.
+    let repo = gix::open(repo.path())?;
+    assert_eq!(
+        but_workspace::legacy::push::workspace_remote_branch(&repo)?.as_deref(),
+        Some("workspace-sync")
+    );
+
+    apply_remote_tracking_updates(&repo, &result)?;
+    let (info, _) = head_info(&repo, &meta)?;
+    assert_eq!(status(&info, "bottom"), NothingToPush);
+    assert_eq!(status(&info, "middle"), NothingToPush);
+    assert_eq!(status(&info, "top"), NothingToPush);
+    assert_eq!(status(&info, "solo"), NothingToPush);
+
+    Ok(())
+}
+
+#[test]
 fn pushing_top_branch_does_not_push_ancestors() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-requiring-force")?;
 
@@ -434,7 +505,6 @@ fn pushing_top_branch_does_not_push_ancestors() -> anyhow::Result<()> {
 
     Ok(())
 }
-
 #[test]
 fn pushing_with_an_ordinary_branch_checked_out_pushes_only_that_branch() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-single-branch")?;
@@ -488,5 +558,72 @@ fn pushing_with_an_ordinary_branch_checked_out_pushes_only_that_branch() -> anyh
         Some("refs/heads/top".into()),
         "pushing leaves the checkout untouched"
     );
+    Ok(())
+}
+
+#[test]
+fn push_works_when_target_ref_is_a_tag() -> anyhow::Result<()> {
+    let (_tmp, repo, meta) = fixture("push")?;
+    let base_id = repo.rev_parse_single("main")?.detach();
+    repo.reference(
+        "refs/tags/v1.0.0",
+        base_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "test",
+    )?;
+    let tag_project_meta = ProjectMeta {
+        target_ref: Some(but_core::ref_metadata::LocalRefName::new(
+            "refs/tags/v1.0.0".try_into()?,
+        )?),
+        target_commit_id: Some(base_id),
+        push_remote: None,
+    };
+
+    let (info, workspace) = but_workspace::head_info_and_workspace(
+        &repo,
+        &meta,
+        &mut but_testsupport::project_db(&repo)?,
+        Options {
+            project_meta: tag_project_meta.clone(),
+            expensive_commit_info: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(status(&info, "solo"), CompletelyUnpushed);
+
+    let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+    let result = but_workspace::legacy::workspace_branch_and_ancestors_push(
+        &repo,
+        &workspace,
+        &info,
+        &mut db,
+        false,
+        false,
+        false,
+        false,
+        r("refs/heads/solo"),
+        false,
+        false,
+        Vec::new(),
+    )?;
+    assert_eq!(result.remote, "origin");
+    apply_remote_tracking_updates(&repo, &result)?;
+
+    let (info_after, _) = but_workspace::head_info_and_workspace(
+        &repo,
+        &meta,
+        &mut but_testsupport::project_db(&repo)?,
+        Options {
+            project_meta: tag_project_meta,
+            expensive_commit_info: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        status(&info_after, "solo"),
+        NothingToPush,
+        "remote-tracking branch should be deduced from default remote even when target_ref is a tag"
+    );
+
     Ok(())
 }

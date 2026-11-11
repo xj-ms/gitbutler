@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
 	import CreateBranchModal from "$components/branch/CreateBranchModal.svelte";
+	import PushAllModal from "$components/forge/PushAllModal.svelte";
 	import SyncButton from "$components/forge/SyncButton.svelte";
+	import RemoveProjectModal from "$components/projectSettings/RemoveProjectModal.svelte";
+	import ProjectSelectItem from "$components/shared/ProjectSelectItem.svelte";
 	import IntegrateUpstreamModal from "$components/upstream/IntegrateUpstreamModal.svelte";
 	import { BACKEND } from "$lib/backend";
 	import { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
@@ -20,8 +23,10 @@
 		SelectItem,
 		TestId,
 		Tooltip,
+		chipToasts,
 	} from "@gitbutler/ui-svelte";
 	import { focusable } from "@gitbutler/ui-svelte/focus/focusable";
+	import { tick } from "svelte";
 
 	type Props = {
 		projectId: string;
@@ -120,6 +125,10 @@
 	let newProjectLoading = $state(false);
 	let projectSelectorOpen = $state(false);
 	let newWindowModifierHeld = $state(false);
+	let projectSelector = $state<Select>();
+	let projectToRemove = $state<{ id: string; title: string }>();
+	let removeProjectModal = $state<RemoveProjectModal>();
+	let removingProject = $state(false);
 
 	const isMac = $derived(backend.platformName === "macos");
 	// ⌘-click is the new-window gesture on macOS; elsewhere that role belongs to Ctrl.
@@ -165,6 +174,26 @@
 	}
 
 	let createBranchModal = $state<CreateBranchModal>();
+	let pushAllModal = $state<PushAllModal>();
+
+	async function confirmProjectRemoval(id: string, title: string) {
+		projectSelector?.toggleList();
+		projectToRemove = { id, title };
+		await tick();
+		removeProjectModal?.show();
+	}
+
+	async function removeProject() {
+		if (!projectToRemove) return;
+
+		removingProject = true;
+		try {
+			await projectsService.deleteProject(projectToRemove.id);
+			chipToasts.success("Project deleted");
+		} finally {
+			removingProject = false;
+		}
+	}
 
 	$effect(() => shortcutService.on("create-branch", () => createBranchModal?.show()));
 	$effect(() =>
@@ -209,6 +238,7 @@
 	<div class="chrome-center" data-tauri-drag-region={useCustomTitleBar}>
 		<div class="chrome-selector-wrapper">
 			<Select
+				bind:this={projectSelector}
 				searchable
 				value={projectId}
 				options={mappedProjects}
@@ -245,13 +275,17 @@
 				{/snippet}
 
 				{#snippet itemSnippet({ item, highlighted })}
-					<SelectItem
-						selected={item.value === projectId}
-						{highlighted}
-						hoverIcon={newWindowModifierHeld ? "open-in-folder" : undefined}
-					>
-						{item.label}
-					</SelectItem>
+					{#if item.value && item.label}
+						<ProjectSelectItem
+							projectId={item.value}
+							projectTitle={item.label}
+							selected={item.value === projectId}
+							{highlighted}
+							hoverIcon={newWindowModifierHeld ? "open-in-folder" : undefined}
+							removable={item.value !== projectId && !newWindowModifierHeld}
+							onRemove={() => confirmProjectRemoval(item.value!, item.label!)}
+						/>
+					{/if}
 				{/snippet}
 
 				<OptionsGroup>
@@ -327,6 +361,16 @@
 	<div class="chrome-right" data-tauri-drag-region={useCustomTitleBar}>
 		{#if isOnWorkspacePage}
 			<Button
+				testId={TestId.ChromeHeaderPushAllButton}
+				kind="outline"
+				icon="push-all"
+				reversedDirection
+				disabled={actionsDisabled || isNotInWorkspace}
+				onclick={() => pushAllModal?.show()}
+			>
+				Push all
+			</Button>
+			<Button
 				testId={TestId.ChromeHeaderCreateBranchButton}
 				kind="outline"
 				icon="plus"
@@ -340,7 +384,14 @@
 	</div>
 </div>
 
+<PushAllModal bind:this={pushAllModal} {projectId} />
 <CreateBranchModal bind:this={createBranchModal} {projectId} />
+<RemoveProjectModal
+	bind:this={removeProjectModal}
+	projectTitle={projectToRemove?.title}
+	isDeleting={removingProject}
+	onDeleteClicked={removeProject}
+/>
 
 <style>
 	.chrome-header {

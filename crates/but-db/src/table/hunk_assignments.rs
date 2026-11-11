@@ -32,6 +32,11 @@ pub(crate) const M: &[M<'static>] = &[
         SchemaVersion::Zero,
         "ALTER TABLE `hunk_assignments` ADD COLUMN `branch_ref` BINARY;",
     ),
+    M::up(
+        20261018120000,
+        SchemaVersion::Zero,
+        "ALTER TABLE `hunk_assignments` ADD COLUMN `previous_path_bytes` BINARY;",
+    ),
 ];
 
 /// Tests are in `but-db/tests/db/table/hunk_assignments.rs`.
@@ -43,6 +48,7 @@ pub struct HunkAssignment {
     pub path_bytes: Vec<u8>,
     pub stack_id: Option<String>,
     pub branch_ref_bytes: Option<Vec<u8>>,
+    pub previous_path_bytes: Option<Vec<u8>>,
 }
 
 impl DbHandle {
@@ -81,7 +87,7 @@ impl HunkAssignmentsHandle<'_> {
     /// Lists all hunk assignments in the database.
     pub fn list_all(&self) -> rusqlite::Result<Vec<HunkAssignment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, hunk_header, path, path_bytes, stack_id, branch_ref FROM hunk_assignments",
+            "SELECT id, hunk_header, path, path_bytes, stack_id, branch_ref, previous_path_bytes FROM hunk_assignments",
         )?;
 
         let results = stmt.query_map([], |row| {
@@ -92,6 +98,7 @@ impl HunkAssignmentsHandle<'_> {
                 path_bytes: row.get(3)?,
                 stack_id: row.get(4)?,
                 branch_ref_bytes: row.get(5)?,
+                previous_path_bytes: row.get(6)?,
             })
         })?;
 
@@ -113,14 +120,15 @@ impl HunkAssignmentsHandleMut<'_> {
 
         for assignment in assignments {
             self.sp.execute(
-                "INSERT INTO hunk_assignments (id, hunk_header, path, path_bytes, branch_ref) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO hunk_assignments (id, hunk_header, path, path_bytes, branch_ref, previous_path_bytes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     assignment.id,
                     assignment.hunk_header,
                     assignment.path,
                     assignment.path_bytes,
                     assignment.branch_ref_bytes,
+                    assignment.previous_path_bytes,
                 ],
             )?;
         }

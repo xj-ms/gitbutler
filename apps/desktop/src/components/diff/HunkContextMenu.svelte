@@ -13,11 +13,12 @@
 </script>
 
 <script lang="ts">
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import OpenWithEditorSubmenu from "$components/shared/OpenWithEditorSubmenu.svelte";
+	import { BACKEND } from "$lib/backend";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { isDiffHunk, lineIdsToHunkHeaders } from "$lib/hunks/hunk";
 	import { laneIdOf } from "$lib/linkedWorktrees/lane";
-	import { vscodePath } from "$lib/project/project";
 	import { type SelectionId } from "$lib/selection/key";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { UI_STATE } from "$lib/state/uiState.svelte";
@@ -57,8 +58,8 @@
 
 	const stackService = inject(STACK_SERVICE);
 	const uiState = inject(UI_STATE);
-	const urlService = inject(URL_SERVICE);
 	const fileService = inject(FILE_SERVICE);
+	const backend = inject(BACKEND);
 
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
 
@@ -156,6 +157,21 @@
 	export function close() {
 		menuOpen = false;
 	}
+
+	async function openHunkInEditor(item: HunkContextItem, editorId: string) {
+		const projectPath = await fileService.workdirPath(projectId, selectionId.worktree, "");
+		// Use specific line number if available, otherwise use hunk start line
+		const lineNumber = item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
+		await openFileInEditor(backend, {
+			editorId,
+			projectId,
+			worktree: selectionId.worktree,
+			projectPath,
+			filePath,
+			line: lineNumber,
+		});
+		menuOpen = false;
+	}
 </script>
 
 {#if menuOpen && menuItem}
@@ -213,22 +229,12 @@
 					testId={TestId.HunkContextMenu_OpenInEditor}
 					label="Open in {defaultCodeEditor.current.displayName}"
 					icon="open-in-ide"
-					onclick={async () => {
-						const absolutePath = await fileService.workdirPath(
-							projectId,
-							selectionId.worktree,
-							filePath,
-						);
-						// Use specific line number if available, otherwise use hunk start line
-						const lineNumber = item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
-						const path = getEditorUri({
-							schemeId: defaultCodeEditor.current.schemeIdentifer,
-							path: [vscodePath(absolutePath)],
-							line: lineNumber,
-						});
-						urlService.openExternalUrl(path);
-						menuOpen = false;
-					}}
+					onclick={() => openHunkInEditor(item, defaultCodeEditor.current.schemeIdentifer)}
+				/>
+				<OpenWithEditorSubmenu
+					platformName={backend.platformName}
+					defaultEditorId={defaultCodeEditor.current.schemeIdentifer}
+					onselect={(editorId) => openHunkInEditor(item, editorId)}
 				/>
 			</ContextMenuSection>
 

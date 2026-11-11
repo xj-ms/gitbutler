@@ -47,7 +47,10 @@ pub(crate) fn commit_amend_only_impl(
 ) -> anyhow::Result<CommitCreateResult> {
     let worktree = crate::worktrees::open_changes_source(ctx, changes_source)?;
     let mut meta = ctx.meta()?;
-    let (repo, mut ws, mut db) = ctx.workspace_mut_and_db_mut_with_perm(perm)?;
+    let (repo, mut ws, mut db) = {
+        let _span = tracing::debug_span!("workspace_mut_and_db_mut_with_perm").entered();
+        ctx.workspace_mut_and_db_mut_with_perm(perm)?
+    };
     let editor = Editor::create(&mut ws, &mut meta, &repo, &mut db)?;
 
     let but_workspace::commit::CommitAmendOutcome {
@@ -70,7 +73,10 @@ pub(crate) fn commit_amend_only_impl(
     let new_commit = commit_selector
         .map(|commit_selector| rebase.lookup_pick(commit_selector))
         .transpose()?;
-    let workspace = WorkspaceState::from_successful_rebase(rebase, &repo, dry_run)?;
+    let workspace = {
+        let _span = tracing::info_span!("from_successful_rebase").entered();
+        WorkspaceState::from_successful_rebase(rebase, &repo, dry_run)?
+    };
 
     // Put `ws` back so later operations on `ctx` see the rewritten workspace.
     drop(repo);
@@ -106,13 +112,16 @@ pub fn commit_amend(
     let context_lines = ctx.settings.context_lines;
     let mut guard = ctx.exclusive_worktree_access();
     let worktree_ref = crate::worktrees::changes_source_ref(ctx, &changes_source)?;
-    let maybe_oplog_entry = but_oplog::UnmaterializedOplogSnapshot::from_details_with_refs_and_perm(
-        ctx,
-        SnapshotDetails::new(OperationKind::AmendCommit),
-        worktree_ref.as_ref().map(|name| name.as_ref()).as_slice(),
-        guard.read_permission(),
-        dry_run,
-    );
+    let maybe_oplog_entry = {
+        let _span = tracing::info_span!("oplog_snapshot_pre").entered();
+        but_oplog::UnmaterializedOplogSnapshot::from_details_with_refs_and_perm(
+            ctx,
+            SnapshotDetails::new(OperationKind::AmendCommit),
+            worktree_ref.as_ref().map(|name| name.as_ref()).as_slice(),
+            guard.read_permission(),
+            dry_run,
+        )
+    };
 
     let res = commit_amend_only_impl(
         ctx,
@@ -126,6 +135,7 @@ pub fn commit_amend(
     if let Some(snapshot) = maybe_oplog_entry
         && res.is_ok()
     {
+        let _span = tracing::info_span!("oplog_snapshot_commit").entered();
         snapshot.commit(ctx, guard.write_permission()).ok();
     }
     res

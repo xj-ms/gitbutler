@@ -1885,11 +1885,14 @@ fn workspace_target_tip(
             Ok(Some(target_ref_id)) => target_ref_id,
             Ok(None) | Err(_) => return Ok(None),
         };
-    let remote_info = repo
-        .branch_remote_tracking_ref_name(
-            target_ref.as_local_full_name_ref(),
-            gix::remote::Direction::Fetch,
-        )
+    let remote_info = (!target_ref.is_tag())
+        .then(|| {
+            repo.branch_remote_tracking_ref_name(
+                target_ref.as_local_full_name_ref(),
+                gix::remote::Direction::Fetch,
+            )
+        })
+        .flatten()
         .transpose()?
         .and_then(|remote_ref_name| {
             let remote_tip = try_refname_to_id(repo, remote_ref_name.as_ref()).ok()??;
@@ -2022,15 +2025,31 @@ fn symbolic_remote_names_from_tips(
         .target_ref
         .as_ref()
         .and_then(|target_ref| {
-            repo.branch_remote_tracking_ref_name(
-                target_ref.as_local_full_name_ref(),
-                gix::remote::Direction::Fetch,
-            )
+            (!target_ref.is_tag())
+                .then(|| {
+                    repo.branch_remote_tracking_ref_name(
+                        target_ref.as_local_full_name_ref(),
+                        gix::remote::Direction::Fetch,
+                    )
+                })
+                .flatten()
         })
         .transpose()?
         .and_then(|upstream| {
             extract_remote_name_and_short_name(upstream.as_ref(), &remote_names)
                 .map(|(remote, _short_name)| (1, remote))
+        })
+        .or_else(|| {
+            project_meta
+                .target_ref
+                .as_ref()
+                .is_some_and(|target_ref| target_ref.is_tag())
+                .then(|| {
+                    repo.for_find_only()
+                        .remote_default_name(gix::remote::Direction::Push)
+                        .map(|remote| (1, remote.to_str_lossy().into_owned()))
+                })
+                .flatten()
         });
     let push_remote = project_meta
         .push_remote

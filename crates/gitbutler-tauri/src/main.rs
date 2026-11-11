@@ -39,6 +39,9 @@ fn main() -> anyhow::Result<()> {
         std::env::remove_var(but_gpui::INSTALL_UPDATE);
     };
     but_api::panic_capture::install_panic_hook();
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    gitbutler_tauri::debug_console::initialize();
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -140,7 +143,6 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&app_data_dir).context("failed to create app data dir")?;
     std::fs::create_dir_all(&app_cache_dir).context("failed to create app cache dir")?;
     std::fs::create_dir_all(&app_log_dir).context("failed to create app log dir")?;
-
     let tokio_debug = matches!(std::env::var("GITBUTLER_TOKIO_DEBUG").as_deref(), Ok("1"));
     runtime.block_on(async {
         tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -173,6 +175,8 @@ fn main() -> anyhow::Result<()> {
                 let app_handle = tauri_app.handle();
 
                 logs::init(app_handle, &app_log_dir, performance_logging, tokio_debug);
+                #[cfg(all(target_os = "windows", debug_assertions))]
+                gitbutler_tauri::debug_console::hide_at_startup();
 
                 #[cfg(target_os = "macos")]
                 but_action::cli::auto_fix_broken_but_cli_symlink();
@@ -294,6 +298,7 @@ fn main() -> anyhow::Result<()> {
                 but_api::target_commits::tauri_workspace_target_commits::workspace_target_commits,
                 legacy::git::tauri_git_remote_branches::git_remote_branches,
                 but_api::branch::tauri_branch_list::branch_list,
+                legacy::git::tauri_git_tags::git_tags,
                 legacy::git::tauri_delete_all_data::delete_all_data,
                 legacy::git::tauri_git_set_global_config::git_set_global_config,
                 legacy::git::tauri_git_remove_global_config::git_remove_global_config,
@@ -350,6 +355,7 @@ fn main() -> anyhow::Result<()> {
                 legacy::modes::tauri_abort_edit_and_return_to_workspace::abort_edit_and_return_to_workspace,
                 legacy::modes::tauri_edit_initial_index_state::edit_initial_index_state,
                 legacy::modes::tauri_edit_changes_from_initial::edit_changes_from_initial,
+                but_api::open::tauri_open_in_program::open_in_program,
                 open::tauri_open_url::open_url,
                 open::tauri_open_in_terminal::open_in_terminal,
                 open::tauri_show_in_finder::show_in_finder,
@@ -380,6 +386,8 @@ fn main() -> anyhow::Result<()> {
                 legacy::workspace::tauri_branch_details::branch_details,
                 legacy::workspace::tauri_discard_worktree_changes::discard_worktree_changes,
                 legacy::workspace::tauri_stash_into_branch::stash_into_branch,
+                legacy::workspace::tauri_workspace_tracking_branch::workspace_tracking_branch,
+                legacy::workspace::tauri_workspace_push_all::workspace_push_all,
                 legacy::workspace::tauri_workspace_branch_and_ancestors_push::workspace_branch_and_ancestors_push,
                 legacy::absorb::tauri_absorb::absorb,
                 legacy::absorb::tauri_absorption_plan::absorption_plan,

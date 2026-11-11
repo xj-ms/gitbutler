@@ -1,15 +1,16 @@
 <!-- This is a V3 replacement for `FileContextMenu.svelte` -->
 <script lang="ts">
+	import OpenWithEditorSubmenu from "$components/shared/OpenWithEditorSubmenu.svelte";
 	import AbsorbPlanModal from "$components/stack/AbsorbPlanModal.svelte";
 	import DiscardChangesModal from "$components/workspace/DiscardChangesModal.svelte";
 	import StashIntoBranchModal from "$components/workspace/StashIntoBranchModal.svelte";
+	import { BACKEND } from "$lib/backend";
 	import { CLIPBOARD_SERVICE } from "$lib/backend/clipboard";
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { changesToDiffSpec } from "$lib/commits/utils";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { isTreeChange } from "$lib/hunks/change";
 	import { laneIdOf } from "$lib/linkedWorktrees/lane";
-	import { vscodePath } from "$lib/project/project";
 	import { FILE_SELECTION_MANAGER } from "$lib/selection/fileSelectionManager.svelte";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { UI_STATE, withStackBusy } from "$lib/state/uiState.svelte";
@@ -20,7 +21,6 @@
 		ContextMenuItem,
 		ContextMenuItemSubmenu,
 		ContextMenuSection,
-		chipToasts,
 		TestId,
 	} from "@gitbutler/ui-svelte";
 	import { isDefined } from "@gitbutler/ui-svelte/utils/typeguards";
@@ -87,8 +87,8 @@
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
 	const idSelection = inject(FILE_SELECTION_MANAGER);
 	const fileService = inject(FILE_SERVICE);
-	const urlService = inject(URL_SERVICE);
 	const clipboardService = inject(CLIPBOARD_SERVICE);
+	const backend = inject(BACKEND);
 	const [, absorbingChanges] = stackService.absorb;
 
 	// Stashing and absorbing work on the main checkout only.
@@ -160,6 +160,25 @@
 			// Unselect the uncommitted files
 			idSelection.removeMany(selectedFiles);
 		});
+	}
+
+	async function openPathsInEditor(pathsToOpen: string[], editorId: string) {
+		menuOpen = false;
+		try {
+			const projectPath = await absolutePath("");
+			for (const relativePath of pathsToOpen) {
+				const opened = await openFileInEditor(backend, {
+					editorId,
+					projectId,
+					worktree: selectionId.worktree,
+					projectPath,
+					filePath: relativePath,
+				});
+				if (!opened) break;
+			}
+		} catch (error: unknown) {
+			console.error("Failed to load project before opening editor", error);
+		}
 	}
 </script>
 
@@ -277,21 +296,14 @@
 						label="Open in {defaultCodeEditor.current.displayName}"
 						icon="open-in-ide"
 						disabled={deletion}
-						onclick={async () => {
-							menuOpen = false;
-							try {
-								for (const relativePath of pathsToOpen) {
-									const path = getEditorUri({
-										schemeId: defaultCodeEditor.current.schemeIdentifer,
-										path: [vscodePath(await absolutePath(relativePath))],
-									});
-									urlService.openExternalUrl(path);
-								}
-							} catch {
-								chipToasts.error("Failed to open in editor");
-								console.error("Failed to open in editor");
-							}
-						}}
+						onclick={() =>
+							openPathsInEditor(pathsToOpen, defaultCodeEditor.current.schemeIdentifer)}
+					/>
+					<OpenWithEditorSubmenu
+						platformName={backend.platformName}
+						defaultEditorId={defaultCodeEditor.current.schemeIdentifer}
+						disabled={deletion}
+						onselect={(editorId) => openPathsInEditor(pathsToOpen, editorId)}
 					/>
 				{/if}
 				{#if itemPath}

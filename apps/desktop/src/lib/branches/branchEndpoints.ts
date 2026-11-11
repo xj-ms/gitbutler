@@ -86,6 +86,16 @@ export function buildBranchEndpoints(build: BackendEndpointBuilder) {
 					.map((name) => ({ name }));
 			},
 		}),
+		remoteTags: build.query<RemoteBranchInfo[], { projectId: string }>({
+			extraOptions: { command: "git_tags" },
+			query: (args) => args,
+			transformResponse: (data: string[]) => {
+				return data
+					.map((name) => name.replace(/^refs\/tags\//, ""))
+					.sort((a, b) => a.localeCompare(b))
+					.map((name) => ({ name }));
+			},
+		}),
 
 		localTargetBranches: build.query<LocalTargetBranch[], { projectId: string }>({
 			extraOptions: { command: "branch_list" },

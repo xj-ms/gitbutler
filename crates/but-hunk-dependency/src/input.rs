@@ -5,7 +5,7 @@ use gix::bstr::BString;
 use crate::ui::HunkLockTarget;
 
 /// A whole stack for the purpose of generating hunk locking information from it, for use in [`WorkspaceRanges::try_from_stacks()`](crate::WorkspaceRanges::try_from_stacks()) .
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputStack {
     /// The stack that contains [commits](InputStack::commits_from_base_to_tip).
     pub target: HunkLockTarget,
@@ -18,7 +18,7 @@ pub struct InputStack {
 }
 
 /// A commit along with the files that it changes, used in [`InputStack`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputCommit {
     /// The id of the commit this instance refers to.
     pub commit_id: gix::ObjectId,
@@ -27,7 +27,7 @@ pub struct InputCommit {
 }
 
 /// A single file changed in an [`InputCommit`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputFile {
     /// The worktree-relative path to the file.
     pub path: BString,
@@ -38,7 +38,7 @@ pub struct InputFile {
 }
 
 /// A
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputDiffHunk {
     /// The 1-based line number at which the previous version of the file started.
     pub old_start: u32,

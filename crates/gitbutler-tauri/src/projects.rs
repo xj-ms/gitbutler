@@ -88,9 +88,9 @@ pub fn set_project_active(
 
 /// Open the project with the given ID in a new Window, or focus an existing one.
 ///
-/// Note that this command is blocking the main thread just to prevent the chance for races
-/// without having to lock explicitly.
-#[tauri::command]
+/// Must be `async` so window creation runs off the main UI thread; synchronous Tauri commands
+/// deadlock WebView2 on Windows when building a new window.
+#[tauri::command(async)]
 #[instrument(skip(handle), err(Debug))]
 pub fn open_project_in_window(
     handle: tauri::AppHandle,

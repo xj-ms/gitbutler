@@ -10,20 +10,22 @@
 	const baseBranchService = inject(BASE_BRANCH_SERVICE);
 	const remoteBranchesQuery = $derived(baseBranchService.remoteBranches(projectId));
 	const localBranchesQuery = $derived(baseBranchService.localTargetBranches(projectId));
+	const remoteTagsQuery = $derived(baseBranchService.remoteTags(projectId));
 </script>
 
-{#if remoteBranchesQuery.result.isLoading || localBranchesQuery.result.isLoading}
+{#if remoteBranchesQuery.result.isLoading || localBranchesQuery.result.isLoading || remoteTagsQuery.result.isLoading}
 	<FullviewLoading />
 {:else if remoteBranchesQuery.result.isSuccess && localBranchesQuery.result.isSuccess}
 	{@const remoteBranches = remoteBranchesQuery.response ?? []}
 	{@const localBranches = localBranchesQuery.response ?? []}
-	{#if localBranches.length === 0}
+	{@const remoteTags = remoteTagsQuery.response ?? []}
+	{#if localBranches.length === 0 && remoteTags.length === 0}
 		<ProblemLoadingRepo
 			{projectId}
-			error="Create a local branch to use as the project target, then reopen the project."
+			error="Create a local branch or tag to use as the project target, then reopen the project."
 		/>
 	{:else}
-		<ProjectSetup {projectId} {remoteBranches} {localBranches} {notice} />
+		<ProjectSetup {projectId} {remoteBranches} {localBranches} {remoteTags} {notice} />
 	{/if}
 {:else if remoteBranchesQuery.result.isError || localBranchesQuery.result.isError}
 	<ProblemLoadingRepo
