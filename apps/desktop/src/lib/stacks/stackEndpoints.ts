@@ -223,7 +223,11 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 			query: (args) => args,
 			providesTags: (result) => {
 				const stackIds = result ? workspaceStackDetailTags(result) : [];
-				return [providesList(ReduxTag.Stacks), ...providesItems(ReduxTag.StackDetails, stackIds)];
+				return [
+					providesList(ReduxTag.Stacks),
+					providesList(ReduxTag.HeadSha),
+					...providesItems(ReduxTag.StackDetails, stackIds),
+				];
 			},
 			transformResponse(response: RefInfo) {
 				return transformWorkspaceDetails(response);
