@@ -221,6 +221,10 @@ impl Handler {
             let Some(file_name) = path.to_str() else {
                 continue;
             };
+            let file_name = gix::path::to_unix_separators_on_windows(BStr::new(file_name));
+            let Some(file_name) = file_name.to_str().ok() else {
+                continue;
+            };
             match file_name {
                 FETCH_HEAD => {
                     self.emit_app_event(Change::GitFetch(project_id.clone()))?;
