@@ -190,7 +190,7 @@ fn logical_push_scope_crosses_into_the_lane_a_worktree_rests_on() -> anyhow::Res
 }
 
 #[test]
-fn pushing_a_worktree_branch_pushes_the_stack_branches_beneath_it() -> anyhow::Result<()> {
+fn pushing_a_worktree_branch_pushes_only_the_worktree_branch() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-worktree")?;
 
     let result = push(
@@ -203,14 +203,14 @@ fn pushing_a_worktree_branch_pushes_the_stack_branches_beneath_it() -> anyhow::R
     )?;
     assert_eq!(
         pushed_branches(&result),
-        ["bottom", "middle", "wt-on-middle"],
-        "the stack branches beneath the worktree go first, bottom-up"
+        ["wt-on-middle"],
+        "only the explicitly requested worktree branch is pushed"
     );
 
     apply_remote_tracking_updates(&repo, &result)?;
     let (info, _) = head_info(&repo, &meta)?;
-    assert_eq!(status(&info, "bottom"), NothingToPush);
-    assert_eq!(status(&info, "middle"), NothingToPush);
+    assert_eq!(status(&info, "bottom"), CompletelyUnpushed);
+    assert_eq!(status(&info, "middle"), CompletelyUnpushed);
     assert_eq!(status(&info, "wt-on-middle"), NothingToPush);
     assert_eq!(
         status(&info, "top"),
@@ -226,8 +226,8 @@ fn pushing_a_worktree_branch_pushes_the_stack_branches_beneath_it() -> anyhow::R
     let result = push(&repo, &meta, r("refs/heads/wt-top"), false, false, false)?;
     assert_eq!(
         pushed_branches(&result),
-        ["wt-bottom", "wt-top"],
-        "an independent worktree stack pushes like a workspace stack"
+        ["wt-top"],
+        "an independent worktree stack pushes only the selected branch"
     );
     Ok(())
 }
@@ -418,35 +418,25 @@ fn force_push_protection_is_observed_when_pushing_bottom_branch() -> anyhow::Res
 }
 
 #[test]
-fn force_push_protection_is_observed_when_pushing_top_branch() -> anyhow::Result<()> {
+fn pushing_top_branch_does_not_push_ancestors() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-requiring-force")?;
 
-    let err = push(&repo, &meta, r("refs/heads/top"), true, false, true)
-        .expect_err("pushing the top branch should observe bottom branch force protection first");
-    let err = format!("{err:#}");
-    assert!(
-        err.contains("force push was blocked")
-            && err.contains("--force-with-lease")
-            && err.contains("--force-if-includes"),
-        "error should come from force push protection: {err:#}"
-    );
-
-    let result = push(&repo, &meta, r("refs/heads/top"), true, true, true)?;
+    let result = push(&repo, &meta, r("refs/heads/top"), false, false, true)?;
     assert_eq!(
         result
             .branch_to_remote
             .iter()
             .map(|(branch, _, _)| branch.as_str())
             .collect::<Vec<_>>(),
-        ["bottom", "top"],
-        "skipping force push protection should allow pushing the bottom ancestor and top branch"
+        ["top"],
+        "pushing the top branch should only push top and leave the bottom ancestor untouched"
     );
 
     Ok(())
 }
 
 #[test]
-fn pushing_with_an_ordinary_branch_checked_out_pushes_it_and_its_ancestors() -> anyhow::Result<()> {
+fn pushing_with_an_ordinary_branch_checked_out_pushes_only_that_branch() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-single-branch")?;
     assert!(
         repo.find_reference("refs/heads/gitbutler/workspace")
@@ -477,16 +467,16 @@ fn pushing_with_an_ordinary_branch_checked_out_pushes_it_and_its_ancestors() -> 
             .iter()
             .map(|(branch, _, _)| branch.as_str())
             .collect::<Vec<_>>(),
-        ["bottom", "top"],
-        "the checked-out branch and its unpushed ancestor are pushed"
+        ["top"],
+        "only the checked-out branch is pushed"
     );
 
     apply_remote_tracking_updates(&repo, &result)?;
     let (info, _) = head_info(&repo, &meta)?;
     assert_eq!(
         status(&info, "bottom"),
-        NothingToPush,
-        "the ancestor is current after the push"
+        CompletelyUnpushed,
+        "the ancestor remains unpushed"
     );
     assert_eq!(
         status(&info, "top"),

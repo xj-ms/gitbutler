@@ -87,11 +87,6 @@
 			return;
 		}
 
-		if (multipleBranches && !isLastBranchInStack && !$doNotShowPushBelowWarning) {
-			confirmationModal?.show();
-			return;
-		}
-
 		push(args);
 	}
 
@@ -119,11 +114,7 @@
 			uiState.project(projectId).branchesToPoll.add(...upstreamBranchNames);
 
 			// Show success notification
-			const branchText =
-				multipleBranches && !isLastBranchInStack
-					? `${branchName} and all branches below it`
-					: branchName;
-			chipToasts.success(`Pushed ${branchText} successfully`);
+			chipToasts.success(`Pushed ${branchName} successfully`);
 		} catch (error: any) {
 			if (error?.code === "GitForcePushProtection") {
 				forcePushProtectionModal?.show();
@@ -153,14 +144,10 @@
 			return "In order to push, please resolve any conflicted commits.";
 		}
 
-		if (multipleBranches && !isLastBranchInStack) {
-			return "Push this and all branches below";
-		}
-
 		if (withForce) {
 			return remoteTrackingBranch
-				? "Force push this branch"
-				: `Force push this branch to ${remoteTrackingBranch}`;
+				? `Force push this branch to ${remoteTrackingBranch}`
+				: "Force push this branch";
 		}
 
 		return remoteTrackingBranch
@@ -184,7 +171,7 @@
 	disabled={buttonDisabled}
 	tooltip={getButtonTooltip(hasThingsToPush, hasConflicts, withForce, remoteTrackingBranch)}
 	onclick={() => handleClick({ withForce, skipForcePushProtection: false, gerritFlags: [] })}
-	icon={multipleBranches && !isLastBranchInStack ? "push-all" : "push"}
+	icon="push"
 >
 	{isGerritMode ? "Push" : withForce ? "Force push" : "Push"}
 </Button>
@@ -291,13 +278,7 @@
 	{isFirstBranchInStack}
 	{isLastBranchInStack}
 	onPush={(gerritFlags) => {
-		if (multipleBranches && !isLastBranchInStack && !$doNotShowPushBelowWarning) {
-			// Store all gerrit flags for later use when confirmation modal completes
-			pendingGerritFlags = gerritFlags;
-			confirmationModal?.show();
-		} else {
-			push({ withForce, skipForcePushProtection: false, gerritFlags });
-		}
+		push({ withForce, skipForcePushProtection: false, gerritFlags });
 	}}
 />
 

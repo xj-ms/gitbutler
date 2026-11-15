@@ -193,18 +193,21 @@ pub fn branch_and_ancestor_segments<'a>(
         .collect()
 }
 
-/// The segments of [`branch_and_ancestor_segments()`] that pushing `branch` pushes, in top-to-base
-/// order, each with the local branch naming it: those not integrated and not already current on
-/// the remote.
+/// The segment of [`branch_and_ancestor_segments()`] that pushing `branch` pushes, along with the
+/// local branch naming it, if it is not integrated and not already current on the remote.
 ///
-/// [`workspace_branch_and_ancestors_push()`] pushes exactly these, so a preview of the push must
-/// list them too.
+/// Only the explicitly requested `branch` is pushed as a ref; ancestor branches in the stack are
+/// not pushed automatically.
+///
+/// [`workspace_branch_and_ancestors_push()`] pushes exactly this, so a preview of the push must
+/// list it too.
 pub fn branches_to_push<'a>(
     ref_info: &'a RefInfo,
     branch: &gix::refs::FullNameRef,
 ) -> impl DoubleEndedIterator<Item = (&'a Segment, &'a gix::refs::FullNameRef)> + use<'a> {
     branch_and_ancestor_segments(ref_info, branch)
         .into_values()
+        .take(1)
         .filter(|segment| {
             !matches!(
                 segment.push_status,

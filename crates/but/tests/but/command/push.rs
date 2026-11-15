@@ -37,15 +37,55 @@ fn repo_with_worktree_on_unpushed_branch() -> Sandbox {
 }
 
 #[test]
-fn pushing_a_worktree_branch_pushes_what_it_rests_on_first() {
+fn pushing_a_worktree_branch_pushes_only_the_worktree_branch() {
     let env = repo_with_worktree_on_unpushed_branch();
 
     env.but("push wt").assert().success().stdout_eq(str![[r#"
 
 ✓ Push completed successfully
 
-  branchB -> origin/branchB ((new branch) -> 7566fe0)
   wt -> origin/wt ((new branch) -> 9da8421)
+
+"#]]);
+}
+
+#[test]
+fn push_dry_run_of_a_stacked_branch_lists_only_that_branch() {
+    let env = repo_with_unpushed_branch();
+    env.but("branch new branchC --above branchB")
+        .assert()
+        .success();
+    env.file("on-top.txt", "content\n");
+    env.but("commit -m 'on top' -b branchC").assert().success();
+
+    // Pushing branchC pushes only branchC, not the unpushed branchB beneath it.
+    env.but("push --dry-run branchC")
+        .assert()
+        .success()
+        .stdout_eq(str![[r#"
+
+Dry run: Showing what would be pushed
+
+   Branch: branchC ↑ (on top of branchB)
+    → Would push to: origin/branchC
+    Commits: 1 unpushed commit
+  
+      16a3787 on top
+
+
+Summary: Would push 1 commit across 1 branch
+
+Run without --dry-run to push these changes.
+
+"#]]);
+    env.but("push branchC")
+        .assert()
+        .success()
+        .stdout_eq(str![[r#"
+
+✓ Push completed successfully
+
+  branchC -> origin/branchC ((new branch) -> 16a3787)
 
 "#]]);
 }
@@ -271,56 +311,6 @@ Caused by:
 }
 
 #[test]
-fn push_dry_run_of_a_stacked_branch_lists_the_branches_beneath_it() {
-    let env = repo_with_unpushed_branch();
-    env.but("branch new branchC --above branchB")
-        .assert()
-        .success();
-    env.file("on-top.txt", "content\n");
-    env.but("commit -m 'on top' -b branchC").assert().success();
-
-    // Pushing branchC pushes the unpushed branchB beneath it too, so the preview lists both.
-    env.but("push --dry-run branchC")
-        .assert()
-        .success()
-        .stdout_eq(str![[r#"
-
-Dry run: Showing what would be pushed
-
-Stack: branchC (2 branches)
-
-┌─ Branch: branchC ↑ (on top of branchB)
-│   → Would push to: origin/branchC
-│   Commits: 1 unpushed commit
-│ 
-│     16a3787 on top
-│
-└─ Branch: branchB
-    → Would push to: origin/branchB
-    Commits: 1 unpushed commit
-  
-      7566fe0 first commit
-
-
-Summary: Would push 2 commits across 2 branches
-
-Run without --dry-run to push these changes.
-
-"#]]);
-    env.but("push branchC")
-        .assert()
-        .success()
-        .stdout_eq(str![[r#"
-
-✓ Push completed successfully
-
-  branchB -> origin/branchB ((new branch) -> 7566fe0)
-  branchC -> origin/branchC ((new branch) -> 16a3787)
-
-"#]]);
-}
-
-#[test]
 fn push_dry_run_json_reports_remote_and_remote_ref() {
     let env = repo_with_unpushed_branch();
     configure_other_tracking_remote(&env);
@@ -493,7 +483,7 @@ fn repo_with_conflicted_stack_and_clean_lane() -> Sandbox {
 fn bare_push_dry_run_reports_refused_lanes_beside_clean_ones() {
     let env = repo_with_conflicted_stack_and_clean_lane();
 
-    // The real push refuses `B`, which takes `A` with it, and still pushes `clean`.
+    // The real push refuses `A` and `B`, and still pushes `clean`.
     env.but("push --dry-run")
         .assert()
         .failure()
@@ -518,7 +508,10 @@ Stack: B (2 branches)
     → Would not push to: origin/A
     Commits: 1 unpushed commit
 
-    ⚠ Would not be pushed, because the push of 'B' would be refused.
+    ⚠ Cannot push branch 'A': the push would include 1 conflicted commit.
+      Conflicted commits: nyo
+      
+      Hint: Start resolving with `but resolve conflicts nyo`, then push again
 
     ⚡ Force push required
 
@@ -532,7 +525,7 @@ Stack: B (2 branches)
 
 "#]])
         .stderr_eq(str![[r#"
-Error: would refuse to push 1 of 2 branches
+Error: would refuse to push 2 of 3 branches
 
 "#]]);
     // A row without a `warning` is a branch that would really be pushed.
@@ -545,7 +538,7 @@ Error: would refuse to push 1 of 2 branches
     {
       "branchName": "A",
 ...
-      "warning": "Would not be pushed, because the push of 'B' would be refused."
+      "warning": "Cannot push branch 'A': the push would include 1 conflicted commit.[..]then push again"
     },
     {
       "branchName": "B",
@@ -568,7 +561,11 @@ Error: would refuse to push 1 of 2 branches
 
   clean -> origin/clean ((new branch) -> 13cfef2)
 
-✗ Failed to push 1 branch:
+✗ Failed to push 2 branches:
+    A - Cannot push branch 'A': the push would include 1 conflicted commit.
+Conflicted commits: nyo
+
+Hint: Start resolving with `but resolve conflicts nyo`, then push again
     B - Cannot push branch 'B': the push would include 1 conflicted commit.
 Conflicted commits: nyo
 
@@ -588,7 +585,7 @@ fn bare_push_dry_run_lists_a_branch_that_goes_out_through_a_clean_worktree() {
     env.but("worktree list").assert().success();
     add_worktree_with_commit(&env, "W", "lower");
 
-    // The push of `A` is refused, but `W` rests on `lower` and takes it along.
+    // The push of `A` is refused, while `lower` and `W` each push independently.
     env.but("push --dry-run")
         .assert()
         .failure()
@@ -626,7 +623,7 @@ Stack: A (2 branches)
 "#]]);
     env.but("push").assert().failure().stdout_eq(str![[r#"
 
-✓ Successfully pushed 1 commit
+✓ Successfully pushed 2 commits
 
   lower -> origin/lower ((new branch) -> 9883b65)
   W -> origin/W ((new branch) -> fc68cee)
