@@ -21,21 +21,14 @@ export interface SegmentContext {
  */
 export interface StackPrecomputed {
 	/**
-	 * `withForceFromIndex[i]` is true when *any* segment at index `>= i`
-	 * needs a force push. Pre-computed via a single suffix-OR pass over
-	 * the stack so per-segment lookup is O(1).
+	 * `withForceFromIndex[i]` is true when the segment at index `i`
+	 * needs a force push.
 	 */
 	withForceFromIndex: boolean[];
 }
 
 export function precomputeStack(segments: Segment[]): StackPrecomputed {
-	const withForceFromIndex = new Array<boolean>(segments.length);
-	let anyForceFromHere = false;
-	for (let i = segments.length - 1; i >= 0; i--) {
-		const s = segments[i];
-		if (s && branchRequiresForcePush(s)) anyForceFromHere = true;
-		withForceFromIndex[i] = anyForceFromHere;
-	}
+	const withForceFromIndex = segments.map((s) => branchRequiresForcePush(s));
 
 	return { withForceFromIndex };
 }
