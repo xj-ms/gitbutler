@@ -41,6 +41,7 @@ export function buildBranchEndpoints(build: BackendEndpointBuilder) {
 			}),
 			invalidatesTags: [
 				invalidatesType(ReduxTag.WorkspaceFetchStatus),
+				invalidatesType(ReduxTag.BaseBranchData),
 				invalidatesList(ReduxTag.Stacks),
 				invalidatesList(ReduxTag.StackDetails),
 			],
@@ -82,6 +83,16 @@ export function buildBranchEndpoints(build: BackendEndpointBuilder) {
 			transformResponse: (data: string[]) => {
 				return data
 					.map((name) => name.substring(13))
+					.sort((a, b) => a.localeCompare(b))
+					.map((name) => ({ name }));
+			},
+		}),
+		remoteTags: build.query<RemoteBranchInfo[], { projectId: string }>({
+			extraOptions: { command: "git_tags" },
+			query: (args) => args,
+			transformResponse: (data: string[]) => {
+				return data
+					.map((name) => name.replace(/^refs\/tags\//, ""))
 					.sort((a, b) => a.localeCompare(b))
 					.map((name) => ({ name }));
 			},

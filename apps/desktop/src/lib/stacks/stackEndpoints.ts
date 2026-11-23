@@ -63,6 +63,50 @@ import type {
 	PushResult,
 } from "@gitbutler/but-sdk";
 
+export type OutOfSyncBaseTarget = {
+	path: string | null;
+	refName: string;
+	shortName: string;
+	remoteName: string;
+	isTag: boolean;
+	targetSha: string;
+	remoteSha: string | null;
+};
+
+export type WorkspaceTrackingBranch = {
+	remoteName: string;
+	branchName: string | null;
+	outOfSyncBase: OutOfSyncBaseTarget | null;
+	outOfSyncSubmodules: OutOfSyncBaseTarget[];
+};
+
+// [gix-merge-insert-order: 10]
+export type PushedWorkspaceBranchUpdate = {
+	name: string;
+	oldSha: string | null;
+	newSha: string;
+};
+
+export type PushedWorkspaceTargetUpdate = {
+	oldRefName: string | null;
+	newRefName: string;
+	oldRefSha: string | null;
+	oldTargetCommitId: string | null;
+	newTargetCommitId: string;
+};
+
+export type PushedWorkspaceUpdatePlan = {
+	upstreamRefName: string;
+	remoteName: string;
+	oldWorkspaceSha: string;
+	newWorkspaceSha: string;
+	target: PushedWorkspaceTargetUpdate;
+	branches: PushedWorkspaceBranchUpdate[];
+	submodules: PushedWorkspaceBranchUpdate[];
+	hasUncommittedChanges: boolean;
+	uncommittedFiles: string[];
+};
+
 /** Where a new commit goes: `side` of `relativeTo`. */
 export type CommitPlacement = {
 	relativeTo: RelativeTo;
@@ -223,7 +267,11 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 			query: (args) => args,
 			providesTags: (result) => {
 				const stackIds = result ? workspaceStackDetailTags(result) : [];
-				return [providesList(ReduxTag.Stacks), ...providesItems(ReduxTag.StackDetails, stackIds)];
+				return [
+					providesList(ReduxTag.Stacks),
+					providesList(ReduxTag.HeadSha),
+					...providesItems(ReduxTag.StackDetails, stackIds),
+				];
 			},
 			transformResponse(response: RefInfo) {
 				return transformWorkspaceDetails(response);
@@ -294,10 +342,6 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				actionName: "Update Stack Order",
 			},
 			query: (args) => args,
-			// This invalidation causes the order to jump back and forth
-			// on save, and it's a bit unclear why. It's not important to
-			// reload, however, so leaving it like this for now.
-			// invalidatesTags: [invalidatesList(ReduxTag.Stacks)]
 		}),
 		/**
 		 * Note: This is specifically for looking up branches outside of
@@ -366,6 +410,66 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				invalidatesItem(ReduxTag.StackDetails, args.stackId),
 				invalidatesList(ReduxTag.StackDetails),
 				invalidatesList(ReduxTag.BranchListing),
+			],
+		}),
+		workspaceTrackingBranch: build.query<WorkspaceTrackingBranch, { projectId: string }>({
+			extraOptions: { command: "workspace_tracking_branch" },
+			query: (args) => args,
+			providesTags: [providesList(ReduxTag.Stacks), providesList(ReduxTag.HeadSha)],
+		}),
+		pushAll: build.mutation<
+			BranchPushResult,
+			{
+				projectId: string;
+				workspaceRemoteBranch: string;
+				skipForcePushProtection: boolean;
+				runHooks: boolean;
+				pushOpts: GerritPushFlag[];
+			}
+		>({
+			extraOptions: {
+				command: "workspace_push_all",
+				actionName: "Push All",
+			},
+			query: (args) => args,
+			invalidatesTags: [
+				// Pushing updates remote-tracking refs without moving local HEAD, so invalidate
+				// `Stacks` to refetch `workspaceDetails` (`head_info` push statuses) and
+				// `workspaceTrackingBranch`, `BranchListing` to refresh remote branch status,
+				// and `BaseBranchData` in case the workspace base was pushed.
+				invalidatesList(ReduxTag.Stacks),
+				invalidatesList(ReduxTag.BranchListing),
+				invalidatesList(ReduxTag.BaseBranchData),
+			],
+		}),
+		// [gix-merge-insert-order: 10]
+		pushedWorkspaceUpdatePlan: build.query<
+			PushedWorkspaceUpdatePlan | null,
+			{ projectId: string; targetRef?: string; pushRemote?: string }
+		>({
+			extraOptions: { command: "pushed_workspace_update_plan" },
+			query: (args) => args,
+			providesTags: [providesList(ReduxTag.Stacks), providesList(ReduxTag.HeadSha)],
+		}),
+		updatePushedWorkspace: build.mutation<
+			PushedWorkspaceUpdatePlan,
+			{ projectId: string; targetRef?: string; pushRemote?: string }
+		>({
+			extraOptions: {
+				command: "update_pushed_workspace",
+				actionName: "Update Pushed Workspace",
+			},
+			query: (args) => args,
+			invalidatesTags: [
+				invalidatesList(ReduxTag.HeadSha),
+				invalidatesList(ReduxTag.HeadMetadata),
+				invalidatesList(ReduxTag.WorktreeChanges),
+				invalidatesList(ReduxTag.Stacks),
+				invalidatesList(ReduxTag.StackDetails),
+				invalidatesList(ReduxTag.BranchListing),
+				invalidatesType(ReduxTag.BaseBranchData),
+				invalidatesType(ReduxTag.ForgeProvider),
+				invalidatesList(ReduxTag.PullRequests),
 			],
 		}),
 		/** Commit `changes` from `checkout`, the main one by default. */

@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import StageOrAmendSubmenu from "$components/shared/StageOrAmendSubmenu.svelte";
 	import type { DiffHunk } from "@gitbutler/but-sdk";
 	export interface HunkContextItem {
 		hunk: DiffHunk;
@@ -13,11 +14,12 @@
 </script>
 
 <script lang="ts">
-	import { getEditorUri, URL_SERVICE } from "$lib/backend/url";
+	import OpenWithEditorSubmenu from "$components/shared/OpenWithEditorSubmenu.svelte";
+	import { BACKEND } from "$lib/backend";
+	import { openFileInEditor } from "$lib/backend/editor";
 	import { FILE_SERVICE } from "$lib/files/fileService";
 	import { isDiffHunk, lineIdsToHunkHeaders } from "$lib/hunks/hunk";
 	import { laneIdOf } from "$lib/linkedWorktrees/lane";
-	import { vscodePath } from "$lib/project/project";
 	import { type SelectionId } from "$lib/selection/key";
 	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { UI_STATE } from "$lib/state/uiState.svelte";
@@ -57,15 +59,27 @@
 
 	const stackService = inject(STACK_SERVICE);
 	const uiState = inject(UI_STATE);
-	const urlService = inject(URL_SERVICE);
 	const fileService = inject(FILE_SERVICE);
+	const backend = inject(BACKEND);
 
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
+	const inMainCheckout = $derived(
+		selectionId.type === "worktree" && selectionId.worktree === undefined,
+	);
 
 	const filePath = $derived(change.path);
 	let menuOpen = $state(false);
 	let menuTarget = $state<MouseEvent | HTMLElement>();
 	let menuItem = $state<HunkContextItem>();
+
+	function getAmendLineLabel(item: HunkContextItem) {
+		const { selectedLines } = item;
+
+		if (selectedLines !== undefined && selectedLines.length > 0)
+			return `Amend with ${selectedLines.length} selected lines`;
+
+		return "";
+	}
 
 	function getDiscardLineLabel(item: HunkContextItem) {
 		const { selectedLines } = item;
@@ -156,6 +170,21 @@
 	export function close() {
 		menuOpen = false;
 	}
+
+	async function openHunkInEditor(item: HunkContextItem, editorId: string) {
+		const projectPath = await fileService.workdirPath(projectId, selectionId.worktree, "");
+		// Use specific line number if available, otherwise use hunk start line
+		const lineNumber = item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
+		await openFileInEditor(backend, {
+			editorId,
+			projectId,
+			worktree: selectionId.worktree,
+			projectPath,
+			filePath,
+			line: lineNumber,
+		});
+		menuOpen = false;
+	}
 </script>
 
 {#if menuOpen && menuItem}
@@ -173,6 +202,43 @@
 		{#if isHunkContextItem(item)}
 			{#if discardable}
 				<ContextMenuSection>
+					{#if inMainCheckout}
+						<StageOrAmendSubmenu
+							{projectId}
+							{stackId}
+							{selectionId}
+							target={{
+								type: "hunk",
+								change,
+								hunk: item.hunk,
+								unselectHunkLines: unselectAllHunkLines,
+							}}
+							testId={TestId.HunkContextMenu_StageOrAmend}
+							onaction={() => {
+								menuOpen = false;
+							}}
+						/>
+						{#if item.selectedLines !== undefined && item.selectedLines.length > 0 && change.status.type !== "Deletion"}
+							<StageOrAmendSubmenu
+								{projectId}
+								{stackId}
+								{selectionId}
+								label={getAmendLineLabel(item)}
+								icon="checklist"
+								target={{
+									type: "lines",
+									change,
+									hunk: item.hunk,
+									selectedLines: item.selectedLines,
+									unselectHunkLines: unselectAllHunkLines,
+								}}
+								testId={TestId.HunkContextMenu_AmendLines}
+								onaction={() => {
+									menuOpen = false;
+								}}
+							/>
+						{/if}
+					{/if}
 					<ContextMenuItem
 						testId={TestId.HunkContextMenu_DiscardChange}
 						label="Discard change"
@@ -213,22 +279,12 @@
 					testId={TestId.HunkContextMenu_OpenInEditor}
 					label="Open in {defaultCodeEditor.current.displayName}"
 					icon="open-in-ide"
-					onclick={async () => {
-						const absolutePath = await fileService.workdirPath(
-							projectId,
-							selectionId.worktree,
-							filePath,
-						);
-						// Use specific line number if available, otherwise use hunk start line
-						const lineNumber = item.beforeLineNumber ?? item.afterLineNumber ?? item.hunk.newStart;
-						const path = getEditorUri({
-							schemeId: defaultCodeEditor.current.schemeIdentifer,
-							path: [vscodePath(absolutePath)],
-							line: lineNumber,
-						});
-						urlService.openExternalUrl(path);
-						menuOpen = false;
-					}}
+					onclick={() => openHunkInEditor(item, defaultCodeEditor.current.schemeIdentifer)}
+				/>
+				<OpenWithEditorSubmenu
+					platformName={backend.platformName}
+					defaultEditorId={defaultCodeEditor.current.schemeIdentifer}
+					onselect={(editorId) => openHunkInEditor(item, editorId)}
 				/>
 			</ContextMenuSection>
 

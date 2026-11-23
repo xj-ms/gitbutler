@@ -114,6 +114,7 @@ mod types {
                 start,
                 lines,
                 line_shift,
+                insert_order: _,
             }: HunkRange,
         ) -> Self {
             StableHunkRange {

@@ -75,6 +75,8 @@
 			clearTimeout(hoverTimeout);
 		}
 
+		if (isSubmenuOpen) return;
+
 		// Small delay to prevent accidental opening
 		hoverTimeout = setTimeout(() => {
 			// Close all other submenus first
@@ -98,6 +100,9 @@
 
 		if (disabled) return;
 
+		if (!isSubmenuOpen) {
+			submenuCoordination.closeAll();
+		}
 		isSubmenuOpen = !isSubmenuOpen;
 	}
 
@@ -148,7 +153,15 @@
 	aria-expanded={isSubmenuOpen}
 	tabindex="-1"
 >
-	<ContextMenuItem {icon} {label} {disabled} {keyboardShortcut} {testId} onclick={handleClick}>
+	<ContextMenuItem
+		{icon}
+		{label}
+		{disabled}
+		{keyboardShortcut}
+		{testId}
+		preventCloseSubmenus
+		onclick={handleClick}
+	>
 		{#snippet control()}
 			<div class="submenu-chevron">
 				<Icon name="chevron-right" size={14} />

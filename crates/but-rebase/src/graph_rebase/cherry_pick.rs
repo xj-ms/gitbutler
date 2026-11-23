@@ -11,6 +11,7 @@ use but_core::{
     },
 };
 use gix::{objs::tree::EntryKind, prelude::ObjectIdExt as _};
+use tracing::instrument;
 
 /// Describes the outcome of cherrypick.
 #[derive(Debug, Clone)]
@@ -116,6 +117,7 @@ pub enum PickMode {
 ///
 /// `sign_commit`
 /// Controls whether the newly written commit should be signed.
+#[instrument(skip(repo, sign_commit), fields(target = %target, num_ontos = ontos.len()))]
 pub fn cherry_pick(
     repo: &gix::Repository,
     target: gix::ObjectId,
@@ -128,6 +130,7 @@ pub fn cherry_pick(
 
     if ontos == target.parents.as_slice() && pick_mode != PickMode::Force {
         // We don't need to rebase
+        tracing::debug!("identity (parents unchanged)");
         return Ok(CherryPickOutcome::Identity {
             id: target.id.detach(),
             change_id: target.change_id(),
@@ -224,13 +227,16 @@ pub fn cherry_pick(
             let base_t = base_t.object_id().unwrap_or(empty_tree);
             let onto_t = onto_t.object_id().unwrap_or(empty_tree);
 
-            let mut outcome = repo.merge_trees(
-                base_t,
-                onto_t,
-                target_t,
-                repo.default_merge_labels(),
-                repo.merge_options_force_ours()?,
-            )?;
+            let mut outcome = {
+                let _span = tracing::info_span!("merge_trees").entered();
+                repo.merge_trees(
+                    base_t,
+                    onto_t,
+                    target_t,
+                    repo.default_merge_labels(),
+                    repo.merge_options_force_ours()?,
+                )?
+            };
             let tree_id = outcome.tree.write()?;
 
             let conflict_kind = gix::merge::tree::TreatAsUnresolved::forced_resolution();
@@ -397,6 +403,7 @@ fn find_base_tree(
 }
 
 /// Merge together many commits, making use of the preferred tree.
+#[instrument(skip(repo), fields(num_commits = commits.len()))]
 fn merged_tree_from_commits(
     repo: &gix::Repository,
     commits: &[gix::ObjectId],

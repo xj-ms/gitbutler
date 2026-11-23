@@ -8,6 +8,7 @@
 	import { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
 	import { showError } from "$lib/error/showError";
 	import { PROJECTS_SERVICE } from "$lib/project/projectsService";
+	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { OnboardingEvent, POSTHOG_WRAPPER } from "$lib/telemetry/posthog";
 	import { inject } from "@gitbutler/core/context";
 	import { TestId } from "@gitbutler/ui-svelte";
@@ -18,32 +19,44 @@
 		projectId: string;
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
+		remoteTags?: RemoteBranchInfo[];
 		/** Why the target needs choosing again, if it was set before. */
 		notice?: string;
 	}
 
-	const { projectId, remoteBranches, localBranches, notice }: Props = $props();
+	const { projectId, remoteBranches, localBranches, remoteTags = [], notice }: Props = $props();
 
 	const projectsService = inject(PROJECTS_SERVICE);
 	const baseService = inject(BASE_BRANCH_SERVICE);
+	const stackService = inject(STACK_SERVICE);
 	const posthog = inject(POSTHOG_WRAPPER);
 	const urlService = inject(URL_SERVICE);
 	const projectQuery = $derived(projectsService.getProject(projectId));
 	const [setBaseBranchTargetRef] = baseService.setTargetRef;
+	const [updatePushedWorkspace] = stackService.updatePushedWorkspace;
 
-	async function setTarget([branchName, pushRemote]: [
+	async function setTarget([branchName, pushRemote, restorePushedWorkspace]: [
 		branchName: string,
 		pushRemote: string | undefined,
+		restorePushedWorkspace?: boolean,
 	]) {
 		if (!branchName) return;
 
 		try {
-			// Only set the target; the user keeps working on their current branch.
-			await setBaseBranchTargetRef({
-				projectId,
-				targetRef: branchName,
-				pushRemote,
-			});
+			if (restorePushedWorkspace) {
+				await updatePushedWorkspace({
+					projectId,
+					targetRef: branchName,
+					pushRemote,
+				});
+			} else {
+				// Only set the target; the user keeps working on their current branch.
+				await setBaseBranchTargetRef({
+					projectId,
+					targetRef: branchName,
+					pushRemote,
+				});
+			}
 		} catch (e: unknown) {
 			posthog.captureOnboarding(OnboardingEvent.SetTargetBranchFailed, e);
 			throw e;
@@ -84,6 +97,7 @@
 				projectName={project.title}
 				{remoteBranches}
 				{localBranches}
+				{remoteTags}
 				onBranchSelected={setTarget}
 				onOpenProject={openProject}
 				{notice}

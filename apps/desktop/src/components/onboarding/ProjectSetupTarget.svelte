@@ -9,10 +9,11 @@
 	import { GIT_CONFIG_SERVICE } from "$lib/config/gitConfigService";
 	import { classify, type ClassifiedError } from "$lib/error/errorClassification";
 	import { PROJECTS_SERVICE } from "$lib/project/projectsService";
+	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { combineResults } from "$lib/state/helpers";
 	import { OnboardingEvent, POSTHOG_WRAPPER } from "$lib/telemetry/posthog";
 	import { unique } from "$lib/utils/array";
-	import { inject } from "@gitbutler/core/context";
+	import { inject, injectOptional } from "@gitbutler/core/context";
 	import {
 		Button,
 		CardGroup,
@@ -33,8 +34,13 @@
 		projectName: string;
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
+		remoteTags?: RemoteBranchInfo[];
 		onBranchSelected: (
-			branch: [branchName: string, pushRemote: string | undefined],
+			branch: [
+				branchName: string,
+				pushRemote: string | undefined,
+				restorePushedWorkspace?: boolean,
+			],
 		) => Promise<void>;
 		onOpenProject: () => Promise<boolean>;
 		/**
@@ -50,13 +56,17 @@
 		projectName,
 		remoteBranches,
 		localBranches,
+		remoteTags = [],
 		onBranchSelected,
 		onOpenProject,
 		notice,
 	}: Props = $props();
 
+	const TAG_PREFIX = "refs/tags/";
+
 	const posthog = inject(POSTHOG_WRAPPER);
 	const gitConfig = inject(GIT_CONFIG_SERVICE);
+	const stackService = injectOptional(STACK_SERVICE, undefined);
 
 	const gbConfig = $derived(gitConfig.gbConfig(projectId));
 	const gerritMode = $derived(gbConfig.response?.gitbutlerGerritMode ?? false);
@@ -75,20 +85,51 @@
 		),
 	);
 
+	const targetChoices = $derived<LocalTargetBranch[]>([
+		...localBranches,
+		...remoteTags.map((t) => ({
+			name: `${t.name} (tag)`,
+			refName: `${TAG_PREFIX}${t.name}`,
+			isTarget: false,
+		})),
+	]);
+
 	let selectedBranch = $state<LocalTargetBranch | undefined>(undefined);
 	const defaultBranch = $derived(
 		localBranches.find((branch) => branch.isTarget) ??
 			localBranches.find((branch) => branch.name === "main") ??
 			localBranches.find((branch) => branch.name === "master") ??
-			localBranches[0],
+			localBranches[0] ??
+			targetChoices[0],
 	);
 	const branch = $derived(selectedBranch ?? defaultBranch);
+	const isTagSelected = $derived(!!branch?.refName.startsWith(TAG_PREFIX));
 
 	let selectedRemote = $state<string | undefined>(undefined);
 	const defaultRemote = $derived(getBestRemote(remotes));
 	const remote = $derived(selectedRemote ?? defaultRemote);
 	// The stored push remote can't be read while the target is unresolved, so it's left as is.
 	const replacingTarget = $derived(notice !== undefined);
+
+	const setupPlanQuery = $derived(
+		branch?.refName && !isTagSelected
+			? stackService?.pushedWorkspaceUpdatePlan(
+					projectId,
+					branch.refName,
+					replacingTarget ? undefined : remote,
+				)
+			: undefined,
+	);
+	const setupPlan = $derived(setupPlanQuery?.response ?? null);
+	let restorePushedWorkspace = $state<boolean>(true);
+	let lastPlanBranchRef = $state<string | undefined>(undefined);
+	$effect(() => {
+		const currentRef = branch?.refName;
+		if (currentRef !== lastPlanBranchRef) {
+			lastPlanBranchRef = currentRef;
+			restorePushedWorkspace = true;
+		}
+	});
 
 	async function onSetTargetClick() {
 		if (!branch || loading) return;
@@ -99,7 +140,12 @@
 				landDirectly: $landDirectly,
 			});
 			try {
-				await onBranchSelected([branch.refName, replacingTarget ? undefined : remote]);
+				const pushRemote = replacingTarget ? undefined : remote;
+				const shouldRestore = !!setupPlan && restorePushedWorkspace;
+				const args: [string, string | undefined, boolean?] = shouldRestore
+					? [branch.refName, pushRemote, true]
+					: [branch.refName, pushRemote];
+				await onBranchSelected(args);
 				targetWasSet = true;
 			} catch (error) {
 				const classified = classify(error);
@@ -141,13 +187,13 @@
 		<div class="project-setup__field-wrap" data-testid={TestId.ProjectSetupPageTargetBranchSelect}>
 			<Select
 				value={branch?.refName}
-				options={localBranches.map((b) => ({ label: b.name, value: b.refName }))}
+				options={targetChoices.map((b) => ({ label: b.name, value: b.refName }))}
 				disabled={loading || targetWasSet}
 				wide
 				onselect={(value) => {
-					selectedBranch = localBranches.find((branch) => branch.refName === value);
+					selectedBranch = targetChoices.find((branch) => branch.refName === value);
 				}}
-				label="Target branch"
+				label="Target branch or tag"
 				searchable
 			>
 				{#snippet itemSnippet({ item, highlighted })}
@@ -159,13 +205,51 @@
 
 			<p class="text-12 text-body project-setup__field-caption">
 				Your main "production" branch, typically <code class="code-string">master</code> or
-				<code class="code-string">main</code>. Its configured upstream is used for pulling.
+				<code class="code-string">main</code> (whose configured upstream is used for pulling), or a
+				tag to pin the base to a fixed commit.
 				<br />
 				<Link href="https://docs.gitbutler.com/overview#target-branch">Learn more</Link>
 			</p>
 		</div>
+		{#if setupPlan}
+			<div class="project-setup__field-wrap">
+				<label for="restorePushedWorkspace" class="land-directly">
+					<Checkbox
+						name="restorePushedWorkspace"
+						small
+						disabled={loading || targetWasSet}
+						bind:checked={restorePushedWorkspace}
+					/>
+					<span class="text-12 text-semibold">
+						Restore pushed GitButler workspace from <code class="code-string">{branch?.name}</code>
+					</span>
+				</label>
+				{#if restorePushedWorkspace}
+					<p class="text-12 text-body clr-text-2">
+						Restores {setupPlan.branches.length === 1
+							? "1 applied branch"
+							: `${setupPlan.branches.length} applied branches`} ({setupPlan.branches
+							.map((b) => b.name)
+							.join(", ")}) and sets the workspace base to
+						<code class="code-string"
+							>{setupPlan.target.newRefName.replace(/^refs\/(heads|tags)\//, "")}</code
+						>
+						({setupPlan.target.newTargetCommitId.slice(0, 10)}).
+					</p>
+					{#if setupPlan.hasUncommittedChanges}
+						<InfoMessage style="danger">
+							{#snippet content()}
+								Cannot restore workspace while tracked files have uncommitted changes ({setupPlan.uncommittedFiles.join(
+									", ",
+								)}).
+							{/snippet}
+						</InfoMessage>
+					{/if}
+				{/if}
+			</div>
+		{/if}
 
-		{#if remotes.length > 1 && !replacingTarget}
+		{#if remotes.length > 1 && !replacingTarget && !isTagSelected}
 			<div class="project-setup__field-wrap">
 				<Select
 					value={remote}
@@ -251,7 +335,8 @@
 		<Button
 			style="pop"
 			{loading}
-			disabled={!branch}
+			disabled={!branch ||
+				(!!setupPlan && restorePushedWorkspace && setupPlan.hasUncommittedChanges)}
 			onclick={onSetTargetClick}
 			icon="chevron-right"
 			testId={TestId.ProjectSetupPageTargetContinueButton}

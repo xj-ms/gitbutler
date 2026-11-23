@@ -245,14 +245,31 @@ pub fn apply_worktree_changes<'repo>(
         };
         if change_request.hunk_headers.is_empty() {
             let rela_path = change_request.path.as_bstr();
-            match pipeline.worktree_file_to_object(rela_path, &index)? {
-                Some((id, kind, _fs_metadata)) => {
-                    base_tree_editor.upsert(rela_path, entry_kind(rela_path, kind), id)?;
+            if md.is_dir() {
+                if let Ok(sub_repo) = gix::open(&path)
+                    && let Ok(head_id) = sub_repo.head_id()
+                {
+                    base_tree_editor.upsert(
+                        rela_path,
+                        gix::object::tree::EntryKind::Commit,
+                        head_id.detach(),
+                    )?;
+                } else {
+                    into_err_spec(
+                        possible_change,
+                        RejectionReason::WorktreeFileMissingForObjectConversion,
+                    );
                 }
-                None => into_err_spec(
-                    possible_change,
-                    RejectionReason::WorktreeFileMissingForObjectConversion,
-                ),
+            } else {
+                match pipeline.worktree_file_to_object(rela_path, &index)? {
+                    Some((id, kind, _fs_metadata)) => {
+                        base_tree_editor.upsert(rela_path, entry_kind(rela_path, kind), id)?;
+                    }
+                    None => into_err_spec(
+                        possible_change,
+                        RejectionReason::WorktreeFileMissingForObjectConversion,
+                    ),
+                }
             }
         } else if let Some(worktree_changes) = &worktree_changes {
             let Some(worktree_change) = worktree_changes.iter().find(|c| {

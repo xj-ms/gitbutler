@@ -34,6 +34,7 @@ fn workspace_simple() -> anyhow::Result<()> {
                         old_lines: 1,
                         new_start: 2,
                         new_lines: 1,
+                        insert_order: None,
                     }],
                 }],
             }],
@@ -203,6 +204,7 @@ fn intersection_with_addition_change_type() -> anyhow::Result<()> {
                     old_lines: 0,
                     new_start: 1,
                     new_lines: 5,
+                    insert_order: None,
                 }],
             }],
         }],
@@ -242,6 +244,7 @@ fn intersection_with_deletion_change_type() -> anyhow::Result<()> {
                     old_lines: 5,
                     new_start: 0,
                     new_lines: 0,
+                    insert_order: None,
                 }],
             }],
         }],
@@ -281,6 +284,7 @@ fn intersection_with_modification_respects_range() -> anyhow::Result<()> {
                     old_lines: 3,
                     new_start: 5,
                     new_lines: 3,
+                    insert_order: None,
                 }],
             }],
         }],
@@ -324,6 +328,7 @@ fn intersection_mixed_change_types() -> anyhow::Result<()> {
                         old_lines: 2,
                         new_start: 5,
                         new_lines: 2,
+                        insert_order: None,
                     }],
                 }],
             }],
@@ -340,6 +345,7 @@ fn intersection_mixed_change_types() -> anyhow::Result<()> {
                         old_lines: 0,
                         new_start: 1,
                         new_lines: 10,
+                        insert_order: None,
                     }],
                 }],
             }],
@@ -392,6 +398,7 @@ fn adjacent_reorder_is_locked_but_substitution_is_not() -> anyhow::Result<()> {
                         old_lines: 0,
                         new_start: 1,
                         new_lines: 6,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -407,6 +414,7 @@ fn adjacent_reorder_is_locked_but_substitution_is_not() -> anyhow::Result<()> {
                         old_lines: 3,
                         new_start: 4,
                         new_lines: 3,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -479,6 +487,7 @@ fn adjacent_deletion_point_locked_for_reorder() -> anyhow::Result<()> {
                         old_lines: 0,
                         new_start: 1,
                         new_lines: 20,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -493,6 +502,7 @@ fn adjacent_deletion_point_locked_for_reorder() -> anyhow::Result<()> {
                         old_lines: 1,
                         new_start: 14,
                         new_lines: 0,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -515,6 +525,247 @@ fn adjacent_deletion_point_locked_for_reorder() -> anyhow::Result<()> {
         lock_commits.contains(&commit_b),
         "reorder hunk at lines 11-13 should lock to commit B (deletion point at 14), got: {lock_commits:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+fn insert_order_directive_resolves_parallel_insertions() -> anyhow::Result<()> {
+    let path = BString::from("AppHeader.svelte");
+    let stack_id = HunkLockTarget::Stack(StackId::generate());
+    let commit_a = id_from_hex_char('a');
+
+    // Commit A inserts 1 line at line 24 without a directive (implicit order 0).
+    let workspace_ranges = WorkspaceRanges::try_from_stacks(vec![InputStack {
+        target: stack_id,
+        commits_from_base_to_tip: vec![InputCommit {
+            commit_id: commit_a,
+            files: vec![InputFile {
+                path: path.clone(),
+                change_type: TreeStatusKind::Modification,
+                hunks: vec![InputDiffHunk {
+                    old_start: 24,
+                    old_lines: 0,
+                    new_start: 24,
+                    new_lines: 1,
+                    insert_order: None,
+                }],
+            }],
+        }],
+    }])?;
+
+    // 1. Worktree inserts before line 24 with `[gix-merge-insert-order: -10]` (-10 < 0) -> unlocked.
+    let valid_before = DiffHunk {
+        old_start: 24,
+        old_lines: 0,
+        new_start: 24,
+        new_lines: 2,
+        diff: "@@ -24,0 +24,2 @@\n+// [gix-merge-insert-order: -10]\n+import Foo from 'foo';\n"
+            .into(),
+    };
+    assert!(
+        workspace_ranges
+            .intersection(&path, &valid_before)
+            .is_none(),
+        "smaller insert_order before committed insertion should not lock"
+    );
+
+    // 2. Worktree inserts before line 24 with duplicate order 0 (0 < 0 is false) -> locked.
+    let duplicate_before = DiffHunk {
+        old_start: 24,
+        old_lines: 0,
+        new_start: 24,
+        new_lines: 2,
+        diff: "@@ -24,0 +24,2 @@\n+// [gix-merge-insert-order: 0]\n+import Foo from 'foo';\n"
+            .into(),
+    };
+    assert_eq!(
+        workspace_ranges
+            .intersection(&path, &duplicate_before)
+            .unwrap()[0]
+            .commit_id,
+        commit_a,
+        "duplicate insert_order 0 against unmarked committed hunk (implicit 0) must lock"
+    );
+
+    // 3. Worktree inserts before line 24 with inverted order 10 (10 < 0 is false) -> locked.
+    let inverted_before = DiffHunk {
+        old_start: 24,
+        old_lines: 0,
+        new_start: 24,
+        new_lines: 2,
+        diff: "@@ -24,0 +24,2 @@\n+// [gix-merge-insert-order: 10]\n+import Foo from 'foo';\n"
+            .into(),
+    };
+    assert_eq!(
+        workspace_ranges
+            .intersection(&path, &inverted_before)
+            .unwrap()[0]
+            .commit_id,
+        commit_a,
+        "greater insert_order placed before committed insertion must lock"
+    );
+
+    // 4. Worktree inserts after line 24 (`old_start = 25`) with `[gix-merge-insert-order: 10]` (10 > 0) -> unlocked.
+    let valid_after = DiffHunk {
+        old_start: 25,
+        old_lines: 0,
+        new_start: 25,
+        new_lines: 2,
+        diff: "@@ -25,0 +25,2 @@\n+// [gix-merge-insert-order: 10]\n+import Foo from 'foo';\n"
+            .into(),
+    };
+    assert!(
+        workspace_ranges.intersection(&path, &valid_after).is_none(),
+        "greater insert_order after committed insertion should not lock"
+    );
+
+    // 5. Worktree inserts after line 24 (`old_start = 25`) with inverted order -10 (-10 > 0 is false) -> locked.
+    let inverted_after = DiffHunk {
+        old_start: 25,
+        old_lines: 0,
+        new_start: 25,
+        new_lines: 2,
+        diff: "@@ -25,0 +25,2 @@\n+// [gix-merge-insert-order: -10]\n+import Foo from 'foo';\n"
+            .into(),
+    };
+    assert_eq!(
+        workspace_ranges
+            .intersection(&path, &inverted_after)
+            .unwrap()[0]
+            .commit_id,
+        commit_a,
+        "smaller insert_order placed after committed insertion must lock"
+    );
+
+    // 6. Worktree inserts after line 24 (`old_start = 25`) without any directive -> locked.
+    let unmarked_after = DiffHunk {
+        old_start: 25,
+        old_lines: 0,
+        new_start: 25,
+        new_lines: 1,
+        diff: "@@ -25,0 +25,1 @@\n+import Foo from 'foo';\n".into(),
+    };
+    assert_eq!(
+        workspace_ranges
+            .intersection(&path, &unmarked_after)
+            .unwrap()[0]
+            .commit_id,
+        commit_a,
+        "unmarked insertion immediately after committed pure insertion must lock"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn insert_order_splits_committed_hunk_and_interleaves_stacks() -> anyhow::Result<()> {
+    let path = BString::from("file.ts");
+    let stack1_id = HunkLockTarget::Stack(StackId::generate());
+    let stack2_id = HunkLockTarget::Stack(StackId::generate());
+    let commit_a = id_from_hex_char('a');
+    let commit_b = id_from_hex_char('b');
+
+    // Commit A in stack 1 inserts two ordered segments (-10 and +10) at base line 10.
+    let committed_diff = DiffHunk {
+        old_start: 10,
+        old_lines: 0,
+        new_start: 10,
+        new_lines: 4,
+        diff: "@@ -10,0 +10,4 @@\n+// [gix-merge-insert-order: -10]\n+const a = 1;\n+// [gix-merge-insert-order: 10]\n+const c = 3;\n".into(),
+    };
+    let split_hunks = InputDiffHunk::split_from_unified_diff(&committed_diff);
+    assert_eq!(split_hunks.len(), 2);
+    assert_eq!(split_hunks[0].insert_order, Some(-10));
+    assert_eq!(split_hunks[1].insert_order, Some(10));
+
+    // Commit B in stack 2 inserts at the same base line 10 with order 0.
+    let committed_b_diff = DiffHunk {
+        old_start: 10,
+        old_lines: 0,
+        new_start: 10,
+        new_lines: 2,
+        diff: "@@ -10,0 +10,2 @@\n+// [gix-merge-insert-order: 0]\n+const b = 2;\n".into(),
+    };
+
+    let workspace_ranges = WorkspaceRanges::try_from_stacks(vec![
+        InputStack {
+            target: stack1_id,
+            commits_from_base_to_tip: vec![InputCommit {
+                commit_id: commit_a,
+                files: vec![InputFile {
+                    path: path.clone(),
+                    change_type: TreeStatusKind::Modification,
+                    hunks: split_hunks,
+                }],
+            }],
+        },
+        InputStack {
+            target: stack2_id,
+            commits_from_base_to_tip: vec![InputCommit {
+                commit_id: commit_b,
+                files: vec![InputFile {
+                    path: path.clone(),
+                    change_type: TreeStatusKind::Modification,
+                    hunks: InputDiffHunk::split_from_unified_diff(&committed_b_diff),
+                }],
+            }],
+        },
+    ])?;
+
+    // `combine_path_ranges` should interleave stack 1 (-10), stack 2 (0), stack 1 (+10)
+    // at lines 10..12, 12..14, and 14..16.
+    let combined = &workspace_ranges.ranges_by_path_map()[&path];
+    assert_eq!(combined.len(), 3);
+    assert_eq!(
+        (
+            combined[0].commit_id,
+            combined[0].start,
+            combined[0].insert_order
+        ),
+        (commit_a, 10, Some(-10))
+    );
+    assert_eq!(
+        (
+            combined[1].commit_id,
+            combined[1].start,
+            combined[1].insert_order
+        ),
+        (commit_b, 12, Some(0))
+    );
+    assert_eq!(
+        (
+            combined[2].commit_id,
+            combined[2].start,
+            combined[2].insert_order
+        ),
+        (commit_a, 14, Some(10))
+    );
+
+    // Worktree insertion at line 14 (between commit B's 0 and commit A's 10) with order 5 -> unlocked!
+    let wt_between = DiffHunk {
+        old_start: 14,
+        old_lines: 0,
+        new_start: 14,
+        new_lines: 2,
+        diff: "@@ -14,0 +14,2 @@\n+// [gix-merge-insert-order: 5]\n+const b2 = 2.5;\n".into(),
+    };
+    assert!(
+        workspace_ranges.intersection(&path, &wt_between).is_none(),
+        "order 5 between 0 and 10 at line 14 should not lock"
+    );
+
+    // Worktree insertion at line 14 with duplicate order 10 -> locks to commit A!
+    let wt_dup = DiffHunk {
+        old_start: 14,
+        old_lines: 0,
+        new_start: 14,
+        new_lines: 2,
+        diff: "@@ -14,0 +14,2 @@\n+// [gix-merge-insert-order: 10]\n+const b2 = 2.5;\n".into(),
+    };
+    let locks = workspace_ranges.intersection(&path, &wt_dup).unwrap();
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].commit_id, commit_a);
 
     Ok(())
 }
@@ -562,6 +813,7 @@ fn split_reorder_adjacent_to_scattered_deletions() -> anyhow::Result<()> {
                         old_lines: 0,
                         new_start: 1,
                         new_lines: 164,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -579,66 +831,77 @@ fn split_reorder_adjacent_to_scattered_deletions() -> anyhow::Result<()> {
                             old_lines: 1,
                             new_start: 2,
                             new_lines: 1,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 14,
                             old_lines: 1,
                             new_start: 13,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 16,
                             old_lines: 2,
                             new_start: 14,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 20,
                             old_lines: 1,
                             new_start: 16,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 26,
                             old_lines: 1,
                             new_start: 21,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 30,
                             old_lines: 1,
                             new_start: 25,
                             new_lines: 1,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 33,
                             old_lines: 2,
                             new_start: 27,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 36,
                             old_lines: 65,
                             new_start: 28,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 110,
                             old_lines: 4,
                             new_start: 37,
                             new_lines: 0,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 115,
                             old_lines: 11,
                             new_start: 39,
                             new_lines: 1,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 128,
                             old_lines: 7,
                             new_start: 41,
                             new_lines: 0,
+                            insert_order: None,
                         },
                     ],
                 }],
@@ -655,18 +918,21 @@ fn split_reorder_adjacent_to_scattered_deletions() -> anyhow::Result<()> {
                             old_lines: 0,
                             new_start: 16,
                             new_lines: 1,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 27,
                             old_lines: 0,
                             new_start: 29,
                             new_lines: 1,
+                            insert_order: None,
                         },
                         InputDiffHunk {
                             old_start: 52,
                             old_lines: 3,
                             new_start: 54,
                             new_lines: 1,
+                            insert_order: None,
                         },
                     ],
                 }],
@@ -745,6 +1011,7 @@ fn pure_insertion_of_new_content_adjacent_to_modification_is_not_locked() -> any
                         old_lines: 0,
                         new_start: 1,
                         new_lines: 20,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -759,6 +1026,7 @@ fn pure_insertion_of_new_content_adjacent_to_modification_is_not_locked() -> any
                         old_lines: 3,
                         new_start: 10,
                         new_lines: 3,
+                        insert_order: None,
                     }],
                 }],
             },
@@ -792,3 +1060,71 @@ fn pure_insertion_of_new_content_adjacent_to_modification_is_not_locked() -> any
 
     Ok(())
 }
+
+/// When a commit has a pure insertion (e.g. inserting a line at `start..start+1`)
+/// and the worktree deletes or modifies the base line immediately following that
+/// insertion (`old_start == hr.start + hr.lines && old_lines > 0`), a 3-way merge
+/// conflicts because the worktree change removes the base anchor line before which
+/// the commit's insertion was placed.
+///
+/// Conversely, deleting or modifying the base line immediately *before* a committed
+/// pure insertion (`old_start + old_lines == hr.start`) does not conflict in a 3-way
+/// merge and must remain unlocked.
+#[test]
+fn deletion_of_anchor_after_committed_pure_insertion_is_locked() -> anyhow::Result<()> {
+    let path = BString::from("MediaController.cpp");
+    let stack_id = HunkLockTarget::Stack(StackId::generate());
+    let commit_a = id_from_hex_char('a');
+
+    // Commit A: pure insertion of 1 line at workspace line 261 (before base line 261).
+    let committed_diff = DiffHunk {
+        old_start: 250,
+        old_lines: 0,
+        new_start: 261,
+        new_lines: 1,
+        diff: "@@ -250,0 +261,1 @@\n+  return !mIsMuted && mVolume > 0 && IsMediaAudible();\n"
+            .into(),
+    };
+    let workspace_ranges = WorkspaceRanges::try_from_stacks(vec![InputStack {
+        target: stack_id,
+        commits_from_base_to_tip: vec![InputCommit {
+            commit_id: commit_a,
+            files: vec![InputFile {
+                path: path.clone(),
+                change_type: TreeStatusKind::Modification,
+                hunks: InputDiffHunk::split_from_unified_diff(&committed_diff),
+            }],
+        }],
+    }])?;
+
+    // Worktree deletes line 262 (the base anchor line immediately after the committed insertion at 261).
+    let delete_after = DiffHunk {
+        old_start: 262,
+        old_lines: 1,
+        new_start: 280,
+        new_lines: 0,
+        diff: "@@ -262 +280,0 @@\n-  return !mIsMuted && IsMediaAudible();\n".into(),
+    };
+    let locks = workspace_ranges
+        .intersection(&path, &delete_after)
+        .expect("deleting the base anchor line immediately after a committed insertion must lock");
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].commit_id, commit_a);
+
+    // Worktree deletes line 260 (the base line immediately *before* the committed insertion at 261).
+    // In 3-way merge, `259..260` does not overlap `260..260`, so it should NOT lock.
+    let delete_before = DiffHunk {
+        old_start: 260,
+        old_lines: 1,
+        new_start: 259,
+        new_lines: 0,
+        diff: "@@ -260 +259,0 @@\n-  bool prev = true;\n".into(),
+    };
+    assert!(
+        workspace_ranges.intersection(&path, &delete_before).is_none(),
+        "deleting the base line before a committed insertion does not conflict and should not lock"
+    );
+
+    Ok(())
+}
+

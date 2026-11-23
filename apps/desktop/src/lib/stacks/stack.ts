@@ -149,6 +149,36 @@ export function branchHasUnpushedCommits(branch: Segment): boolean {
 	return requiresPush(branch.pushStatus);
 }
 
+/**
+ * Whether the branch's remote has commits that the local branch does not have,
+ * i.e. there is something upstream to integrate via "Update local branch".
+ *
+ * This is independent of {@link branchRequiresForcePush}: a branch can both
+ * require a force push (rewritten local commits) and have upstream commits, in
+ * which case both the force-push and update actions are offered.
+ */
+export function branchHasUpstreamCommits(branch: Segment): boolean {
+	return branch.commitsOnRemote.length > 0;
+}
+
+/**
+ * Whether the "Update local branch" action should be offered, i.e. the local
+ * branch and its remote have diverged in a way that upstream integration can
+ * reconcile.
+ *
+ * This is true either when the remote has genuinely new commits
+ * ({@link branchHasUpstreamCommits}) or when the branch requires a force push
+ * ({@link branchRequiresForcePush}). The latter covers the case where the
+ * remote holds a rewritten/amended version of a local commit (same change-id,
+ * different SHA): such commits are matched to their local counterpart and thus
+ * excluded from `commitsOnRemote`, yet the branches have still diverged and the
+ * integration flow (which computes divergence from the merge-base) has real
+ * work to do.
+ */
+export function branchCanUpdateFromRemote(branch: Segment): boolean {
+	return branchHasUpstreamCommits(branch) || branchRequiresForcePush(branch);
+}
+
 export function requiresPush(status: PushStatus): boolean {
 	return (
 		status === "unpushedCommits" ||

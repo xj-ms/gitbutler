@@ -733,6 +733,17 @@ async fn publish_reviews_for_branch_and_dependents(
         if !handled.insert(branch.name.clone()) {
             continue;
         }
+        let branch_full = gix::refs::Category::LocalBranch.to_full_name(branch.name.as_str())?;
+        if branch.name != branch_name {
+            but_api::legacy::workspace::workspace_branch_and_ancestors_push_only(
+                ctx,
+                with_force,
+                skip_force_push_protection,
+                branch_full.as_ref(),
+                run_hooks,
+                vec![],
+            )?;
+        }
         let message_plan =
             review_message_plan_for_branch(&branch.name, branch_name, default_message, message);
         let published_review = publish_review_for_branch(

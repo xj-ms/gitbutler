@@ -60,9 +60,6 @@ enum EnvOp {
 
 fn updates() -> Vec<EnvOp> {
     // Copied from gix-testtools/lib.rs, in an attempt to isolate everything as good as possible,
-    #[cfg(windows)]
-    const NULL_DEVICE: &str = "NUL";
-    #[cfg(not(windows))]
     const NULL_DEVICE: &str = "/dev/null";
 
     // particularly mutation.

@@ -249,12 +249,14 @@ fn head_checkout(checkouts: &[PaddedCheckout<'_>]) -> Result<Option<HeadCheckout
 
 impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
     fn refresh_workspace(&mut self, repo: &gix::Repository) -> Result<()> {
+        let _span = tracing::info_span!("refresh_from_head").entered();
         let project_meta = self.workspace.graph.project_meta.clone();
         self.workspace
             .refresh_from_head(repo, &*self.meta, project_meta, &mut *self.db)
     }
 
     /// Materializes a history rewrite, and records how its branches stack in the metadata.
+    #[tracing::instrument(skip(self, materialize_options))]
     pub fn materialize(
         mut self,
         materialize_options: MaterializeOptions,
@@ -284,9 +286,11 @@ impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
             head_checkout(&checkouts)?
         };
 
+        let _persist_span = tracing::info_span!("persist_objects").entered();
         if let Some(memory) = self.repo.objects.take_object_memory() {
             memory.persist(&self.repo)?;
         }
+        drop(_persist_span);
 
         ref_edits.extend(worktree_head_edits(&specs)?);
 
@@ -344,7 +348,11 @@ impl<'ws, 'graph, M: RefMetadata> SuccessfulRebase<'ws, 'graph, M> {
             }
         }
 
-        edit_references_deleting_directory_conflicts_first(&repo, ref_edits)?;
+        {
+            let _span =
+                tracing::info_span!("edit_references", num_edits = ref_edits.len()).entered();
+            edit_references_deleting_directory_conflicts_first(&repo, ref_edits)?;
+        }
         branch_stacks.persist(self.meta)?;
         self.refresh_workspace(&repo)?;
 

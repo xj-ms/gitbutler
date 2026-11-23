@@ -277,14 +277,21 @@ fn handle_dry_run(ctx: &mut Context, args: &Command, out: &mut OutputChannel) ->
     // Limit the shared lock to target resolution before continuing with dry-run analysis.
     let fallback_remote = {
         let guard = ctx.shared_worktree_access();
-        workspace_target::ResolvedTarget::resolve_with_perm(ctx, guard.read_permission())?
-            .push_remote_name()
-            .map(str::to_owned)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Failed to determine push remote for dry-run push: workspace target has no push remote."
-                )
-            })?
+        let resolved_remote = workspace_target::ResolvedTarget::resolve_with_perm(
+            ctx,
+            guard.read_permission(),
+        )?
+        .push_remote_name()
+        .map(str::to_owned);
+        match resolved_remote {
+            Some(remote) => remote,
+            None => {
+                let repo = ctx.repo.get()?;
+                ctx.project_meta()?
+                    .push_remote_name(&repo)
+                    .context("Failed to determine push remote for dry-run push: workspace target has no push remote.")?
+            }
+        }
     };
     let repo = ctx.repo.get()?.clone().for_commit_shortening();
     let remote_names = repo.remote_names();
@@ -1017,31 +1024,23 @@ struct PushCandidate {
     includes: Vec<String>,
 }
 
-/// Returns one push candidate per lane that has unpushed commits. Lanes come stacks first,
-/// then worktrees in tip order, so whatever a worktree rests on is pushed before it.
+/// Returns one push candidate per branch that has unpushed commits. Lanes come stacks first,
+/// then worktrees in tip order, and branches within each lane are ordered bottom-to-top so
+/// ancestors push before their children when pushing all branches.
 fn get_push_candidates(ctx: &Context) -> anyhow::Result<Vec<PushCandidate>> {
     let lanes = crate::legacy::workspace::applied_lanes_with_expensive_commit_info(ctx)?;
 
     let mut candidates = Vec::new();
     for stack in &lanes {
-        // Branches are ordered topmost-first; the first one with unpushed
-        // commits is the candidate, everything below it comes along.
-        let mut unpushed = stack.branches.iter().filter_map(|branch| {
-            let count = branch_unpushed_count(branch);
-            (count > 0).then(|| (branch.name.clone(), count))
-        });
-        if let Some((branch_name, count)) = unpushed.next() {
-            let mut unpushed_commits = count;
-            let mut includes = Vec::new();
-            for (name, count) in unpushed {
-                unpushed_commits += count;
-                includes.push(name);
+        for branch in stack.branches.iter().rev() {
+            let unpushed_commits = branch_unpushed_count(branch);
+            if unpushed_commits > 0 {
+                candidates.push(PushCandidate {
+                    branch_name: branch.name.clone(),
+                    unpushed_commits,
+                    includes: Vec::new(),
+                });
             }
-            candidates.push(PushCandidate {
-                branch_name,
-                unpushed_commits,
-                includes,
-            });
         }
     }
     Ok(candidates)

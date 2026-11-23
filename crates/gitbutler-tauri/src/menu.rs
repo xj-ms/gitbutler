@@ -1,4 +1,3 @@
-#[cfg(target_os = "macos")]
 use anyhow::Context as _;
 #[cfg(target_os = "macos")]
 use tauri::menu::AboutMetadata;
@@ -8,6 +7,32 @@ use tauri::{
 };
 
 static SHORTCUT_EVENT: &str = "menu://shortcut";
+
+/// Update an ordinary application menu item, including items inside submenus.
+#[tauri::command(async)]
+#[tracing::instrument(skip(handle), err(Debug))]
+pub fn menu_item_set_enabled<R: Runtime>(
+    handle: AppHandle<R>,
+    id: String,
+    enabled: bool,
+) -> Result<(), but_api::json::Error> {
+    let menu = handle.menu().context("Application menu not found")?;
+    let mut items = menu.items().context("Failed to read application menu")?;
+    while let Some(item) = items.pop() {
+        if item.id().as_ref() == id {
+            let item = item
+                .as_menuitem()
+                .with_context(|| format!("Menu item '{id}' is not an ordinary menu item"))?;
+            item.set_enabled(enabled)
+                .with_context(|| format!("Failed to update menu item '{id}'"))?;
+            return Ok(());
+        }
+        if let Some(submenu) = item.as_submenu() {
+            items.extend(submenu.items().context("Failed to read submenu")?);
+        }
+    }
+    Err(anyhow::anyhow!("Menu item '{id}' not found").into())
+}
 
 pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     #[cfg(not(feature = "disable-auto-updates"))]
@@ -122,6 +147,10 @@ pub fn build<R: Runtime>(handle: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             .accelerator("CmdOrCtrl+R")
             .build(handle)?,
     ])?;
+
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    view_menu
+        .append(&MenuItemBuilder::with_id("view/debug-console", "Debug Console").build(handle)?)?;
 
     let mut project_menu_builder = SubmenuBuilder::new(handle, "Project")
         .item(
@@ -242,6 +271,12 @@ pub fn handle_event(webview: &WebviewWindow, event: &MenuEvent) {
             }
             return;
         }
+    }
+
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    if event.id() == "view/debug-console" {
+        crate::debug_console::toggle();
+        return;
     }
 
     if event.id() == "view/switch-theme" {

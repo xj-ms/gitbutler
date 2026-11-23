@@ -19,6 +19,7 @@
 		caption?: string;
 		onclick: (e: MouseEvent) => void;
 		testId?: string;
+		preventCloseSubmenus?: boolean;
 	}
 
 	const {
@@ -32,6 +33,7 @@
 		keyboardShortcut,
 		caption,
 		testId,
+		preventCloseSubmenus = false,
 	}: Props = $props();
 
 	// Get submenu coordination context if available
@@ -46,6 +48,7 @@
 		| undefined = getContext(SUBMENU_CONTEXT_KEY);
 
 	function handleMouseEnter() {
+		if (preventCloseSubmenus) return;
 		// Close any open submenus when hovering over a regular menu item
 		submenuCoordination?.closeAll();
 	}

@@ -483,4 +483,28 @@ describe("buildStackEndpoints", () => {
 			invalidatesType(ReduxTag.BaseBranchData),
 		]);
 	});
+
+	test("workspaceDetails provides HeadSha so commit mutations refetch it", () => {
+		const endpoints = buildStackEndpoints(createEndpointBuilder());
+		const providesTags = endpoints.workspaceDetails.providesTags;
+
+		if (typeof providesTags !== "function") {
+			throw new Error("Expected workspaceDetails.providesTags to be callable");
+		}
+
+		expect(
+			providesTags(
+				undefined,
+				undefined,
+				{
+					projectId: "project-1",
+				},
+				undefined,
+			),
+		).toEqual([
+			providesList(ReduxTag.Stacks),
+			providesList(ReduxTag.HeadSha),
+			providesList(ReduxTag.StackDetails),
+		]);
+	});
 });

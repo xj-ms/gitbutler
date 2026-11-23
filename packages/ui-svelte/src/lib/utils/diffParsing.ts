@@ -54,6 +54,99 @@ export function parseHunk(hunkStr: string): Hunk {
 	return hunk;
 }
 
+/** Hunks with more lines than this are not re-diffed, to keep rendering cheap. */
+const IGNORE_WHITESPACE_MAX_LINES = 5000;
+const ALL_WHITESPACE_REGEX = /\s+/g;
+
+type SideLine = { lineNumber: number; content: string };
+
+/**
+ * Re-diff the lines of `hunk` with all whitespace removed (like `git diff -w`),
+ * turning lines that only differ by whitespace into context lines.
+ *
+ * This is a view-only transformation: the hunk header is preserved, and the
+ * resulting sections no longer match the backend hunk line-for-line.
+ * Added or removed lines that are blank after normalization are dropped.
+ * `whitespaceOnly` is `true` if no changed lines remain.
+ */
+export function ignoreWhitespaceInHunk(hunk: Hunk): { hunk: Hunk; whitespaceOnly: boolean } {
+	const oldSide: SideLine[] = [];
+	const newSide: SideLine[] = [];
+	for (const section of hunk.contentSections) {
+		for (const line of section.lines) {
+			if (section.sectionType !== SectionType.AddedLines && line.beforeLineNumber !== undefined) {
+				oldSide.push({ lineNumber: line.beforeLineNumber, content: line.content });
+			}
+			if (section.sectionType !== SectionType.RemovedLines && line.afterLineNumber !== undefined) {
+				newSide.push({ lineNumber: line.afterLineNumber, content: line.content });
+			}
+		}
+	}
+
+	if (oldSide.length + newSide.length > IGNORE_WHITESPACE_MAX_LINES) {
+		const hasDelta = hunk.contentSections.some((s) => isDeltaLine(s.sectionType));
+		return { hunk, whitespaceOnly: !hasDelta };
+	}
+
+	const differ = new diff_match_patch();
+	differ.Diff_Timeout = 0;
+	// Every line gets a terminator so that the last line is interned like all others.
+	function toText(side: SideLine[]) {
+		return side.map((l) => l.content.replace(ALL_WHITESPACE_REGEX, "") + "\n").join("");
+	}
+	const { chars1, chars2 } = differ.diff_linesToChars_(toText(oldSide), toText(newSide));
+	const diffs = differ.diff_main(chars1, chars2, false);
+
+	const contentSections: ContentSection[] = [];
+	function push(sectionType: SectionType, line: Line) {
+		const last = contentSections.at(-1);
+		if (last && last.sectionType === sectionType) {
+			last.lines.push(line);
+		} else {
+			contentSections.push({ sectionType, lines: [line] });
+		}
+	}
+
+	let oldIndex = 0;
+	let newIndex = 0;
+	let whitespaceOnly = true;
+	for (const [op, chars] of diffs) {
+		for (let i = 0; i < chars.length; i++) {
+			if (op === Operation.Equal) {
+				const oldLine = oldSide[oldIndex++];
+				const newLine = newSide[newIndex++];
+				push(SectionType.Context, {
+					beforeLineNumber: oldLine.lineNumber,
+					afterLineNumber: newLine.lineNumber,
+					content: newLine.content,
+				});
+			} else if (op === Operation.Delete) {
+				const oldLine = oldSide[oldIndex++];
+				if (isBlank(oldLine.content)) continue;
+				whitespaceOnly = false;
+				push(SectionType.RemovedLines, {
+					beforeLineNumber: oldLine.lineNumber,
+					content: oldLine.content,
+				});
+			} else {
+				const newLine = newSide[newIndex++];
+				if (isBlank(newLine.content)) continue;
+				whitespaceOnly = false;
+				push(SectionType.AddedLines, {
+					afterLineNumber: newLine.lineNumber,
+					content: newLine.content,
+				});
+			}
+		}
+	}
+
+	return { hunk: { ...hunk, contentSections }, whitespaceOnly };
+}
+
+function isBlank(content: string): boolean {
+	return content.trim().length === 0;
+}
+
 export type DependencyLockTarget =
 	| {
 			type: "stack";
@@ -143,7 +236,7 @@ export type ContentSection = {
 	readonly sectionType: SectionType;
 };
 
-type Hunk = {
+export type Hunk = {
 	readonly oldStart: number;
 	readonly oldLines: number;
 	readonly newStart: number;

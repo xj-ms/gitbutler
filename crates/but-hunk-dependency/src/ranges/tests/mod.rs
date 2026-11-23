@@ -40,6 +40,7 @@ fn input_hunk_from_unified_diff(diff: &str) -> Result<InputDiffHunk, anyhow::Err
                 0
             },
         new_lines,
+        insert_order: None,
     })
 }
 

@@ -22,6 +22,8 @@ pub struct HunkRange {
     pub lines: u32,
     /// How many lines up or down this hunk moved when tracking it through the commits.
     pub line_shift: i32,
+    /// Optional explicit `[gix-merge-insert-order: <i32>]` directive order for this range.
+    pub insert_order: Option<i32>,
 }
 
 /// Gets the top and bottom edges of the given hunk. `top` is 0 if the hunk

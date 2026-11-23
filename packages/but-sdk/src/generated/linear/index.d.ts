@@ -177,6 +177,19 @@ export type BaseBranch = {
   conflicted: boolean;
   targetShaAheadOfRef: boolean;
   shortName: string;
+  /**
+   * `true` when the base target is a Git tag (`refs/tags/*`) rather than a
+   * remote-tracking branch. Tag bases are pinned and don't support push-to-base
+   * or forge/PR-base integration.
+   */
+  isTag: boolean;
+  // [gix-merge-insert-order: 10]
+  /**
+   * Signed commit-timestamp difference (`upstream_seconds - local_seconds`) when
+   * `gitbutler/workspace` has a configured remote-tracking branch whose tip differs
+   * from local `gitbutler/workspace` and points to a valid managed `GitButler Workspace Commit`.
+   */
+  pushedWorkspaceTimeDiffSecs: number | null;
 };
 
 export type BitbucketAccountIdentifier = {

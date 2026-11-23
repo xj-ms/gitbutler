@@ -1,6 +1,5 @@
 import { isDefined } from "@gitbutler/ui-svelte/utils/typeguards";
-import type { DiffSpec, HunkAssignment } from "@gitbutler/but-sdk";
-import type { TreeChange } from "@gitbutler/but-sdk";
+import type { DiffSpec, HunkAssignment, HunkHeader, TreeChange } from "@gitbutler/but-sdk";
 
 /** Helper function that turns tree changes into a diff spec */
 export function changesToDiffSpec(
@@ -19,6 +18,28 @@ export function changesToDiffSpec(
 			hunkHeaders,
 		};
 	});
+}
+
+/** Turns a single hunk of a tree change into a diff spec. */
+export function hunkToDiffSpec(change: TreeChange, hunk: HunkHeader): DiffSpec {
+	const previousPathBytes =
+		change.status.type === "Rename" ? change.status.subject.previousPathBytes : null;
+	const isWholeFileChange = change.status.type === "Addition" || change.status.type === "Deletion";
+
+	return {
+		previousPathBytes,
+		pathBytes: change.pathBytes,
+		hunkHeaders: isWholeFileChange
+			? []
+			: [
+					{
+						oldStart: hunk.oldStart,
+						oldLines: hunk.oldLines,
+						newStart: hunk.newStart,
+						newLines: hunk.newLines,
+					},
+				],
+	};
 }
 
 export function findEarliestConflict<T extends { hasConflicts?: boolean }>(
