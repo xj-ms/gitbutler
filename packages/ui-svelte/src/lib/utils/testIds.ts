@@ -164,6 +164,10 @@ export enum TestId {
 	ChromeHeaderCreateCodegenSessionButton = "chrome-header-create-codegen-session-button",
 	ChromeHeaderCurrentBranch = "chrome-header-current-branch",
 	ChromeHeaderSwitchBackToWorkspaceButton = "chrome-header-switch-back-to-workspace-button",
+	// [gix-merge-insert-order: 10]
+	UpdatePushedWorkspaceButton = "update-pushed-workspace-button",
+	UpdatePushedWorkspaceModal = "update-pushed-workspace-modal",
+	UpdatePushedWorkspaceActionButton = "update-pushed-workspace-action-button",
 	ChromeSideBarProjectSettingsButton = "chrome-sidebar-project-settings-button",
 	NotOnGitButlerBranchView = "not-on-gitbutler-branch-view",
 	ProjectSettingsModal = "project-settings-modal",

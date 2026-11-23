@@ -51,6 +51,11 @@ pub struct BaseBranch {
     pub conflicted: bool,
     pub target_sha_ahead_of_ref: bool,
     pub short_name: String,
+    // [gix-merge-insert-order: 10]
+    /// Signed commit-timestamp difference (`upstream_seconds - local_seconds`) when
+    /// `gitbutler/workspace` has a configured remote-tracking branch whose tip differs
+    /// from local `gitbutler/workspace` and points to a valid managed `GitButler Workspace Commit`.
+    pub pushed_workspace_time_diff_secs: Option<i64>,
 }
 #[cfg(feature = "export-schema")]
 but_schemars::register_sdk_type!(BaseBranch);
@@ -431,6 +436,10 @@ pub(crate) fn target_to_base_branch(
         but_core::extract_remote_name_and_short_name(name.as_ref(), &repo.remote_names())
             .map(|(remote, _)| remote)
     });
+    let pushed_workspace_time_diff_secs =
+        but_workspace::legacy::pushed_workspace_time_diff_secs(repo, project_meta)
+            .ok()
+            .flatten();
     let push_remote_name = project_meta
         .push_remote
         .clone()
@@ -457,6 +466,8 @@ pub(crate) fn target_to_base_branch(
         conflicted,
         target_sha_ahead_of_ref,
         short_name,
+        // [gix-merge-insert-order: 10]
+        pushed_workspace_time_diff_secs,
     };
     Ok(base)
 }

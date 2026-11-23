@@ -469,6 +469,26 @@ export class StackService {
 		return this.backendApi.endpoints.pushWorkspaceBranchAndAncestors.useMutation(options);
 	}
 
+	// [gix-merge-insert-order: 10]
+	pushedWorkspaceUpdatePlan(projectId: string, targetRef?: string, pushRemote?: string) {
+		return this.backendApi.endpoints.pushedWorkspaceUpdatePlan.useQuery({
+			projectId,
+			targetRef,
+			pushRemote,
+		});
+	}
+
+	async fetchPushedWorkspaceUpdatePlan(projectId: string, targetRef?: string, pushRemote?: string) {
+		return await this.backendApi.endpoints.pushedWorkspaceUpdatePlan.fetch(
+			{ projectId, targetRef, pushRemote },
+			{ forceRefetch: true },
+		);
+	}
+
+	get updatePushedWorkspace() {
+		return this.backendApi.endpoints.updatePushedWorkspace.useMutation();
+	}
+
 	createCommit() {
 		return this.backendApi.endpoints.commitCreate.useMutation();
 	}

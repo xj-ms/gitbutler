@@ -166,6 +166,13 @@ export type BaseBranch = {
   conflicted: boolean;
   targetShaAheadOfRef: boolean;
   shortName: string;
+  // [gix-merge-insert-order: 10]
+  /**
+   * Signed commit-timestamp difference (`upstream_seconds - local_seconds`) when
+   * `gitbutler/workspace` has a configured remote-tracking branch whose tip differs
+   * from local `gitbutler/workspace` and points to a valid managed `GitButler Workspace Commit`.
+   */
+  pushedWorkspaceTimeDiffSecs: number | null;
 };
 
 export type BitbucketAccountIdentifier = {

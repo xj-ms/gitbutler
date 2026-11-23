@@ -432,6 +432,72 @@ pub struct WorkspaceBranchAndAncestorsPushOutcome {
     pub review_sync: but_forge::ReviewSyncOutcome,
 }
 
+// [gix-merge-insert-order: 10]
+/// Inspect the pushed-workspace update plan when `gitbutler/workspace` has a configured
+/// remote-tracking branch whose tip differs from the local workspace HEAD and points to a valid
+/// managed `GitButler Workspace Commit`, or when `target_ref` is provided and points to a valid
+/// managed workspace commit during project setup.
+#[but_api]
+#[instrument(err(Debug))]
+pub fn pushed_workspace_update_plan(
+    ctx: &but_ctx::Context,
+    target_ref: Option<String>,
+    push_remote: Option<String>,
+) -> Result<Option<but_workspace::legacy::push::PushedWorkspaceUpdatePlan>> {
+    let _guard = ctx.shared_worktree_access();
+    let repo = ctx.repo.get()?;
+    let project_meta = ctx.project_meta().unwrap_or_default();
+    if let Some(target_ref_str) = target_ref.as_deref().filter(|s| !s.is_empty()) {
+        let Ok(full_ref) = gix::refs::FullName::try_from(target_ref_str) else {
+            return Ok(None);
+        };
+        return but_workspace::legacy::push::pushed_workspace_setup_plan_for_ref(
+            &repo,
+            &project_meta,
+            full_ref.as_ref(),
+            push_remote.as_deref(),
+        );
+    }
+    but_workspace::legacy::push::pushed_workspace_update_plan(&repo, &project_meta)
+}
+
+/// Reset the local workspace, applied branch refs, and base target ref/metadata to match the
+/// configured remote-tracking branch of `gitbutler/workspace` (or the specified `target_ref`
+/// pointing to a valid managed workspace commit during project setup).
+#[but_api]
+#[instrument(err(Debug))]
+pub fn update_pushed_workspace(
+    ctx: &mut but_ctx::Context,
+    target_ref: Option<String>,
+    push_remote: Option<String>,
+) -> Result<but_workspace::legacy::push::PushedWorkspaceUpdatePlan> {
+    let mut guard = ctx.exclusive_worktree_access();
+    let project_meta = ctx.project_meta().unwrap_or_default();
+    let mut meta = ctx.meta()?;
+    let (plan, updated_project_meta) = {
+        let repo = ctx.repo.get()?;
+        if let Some(target_ref_str) = target_ref.as_deref().filter(|s| !s.is_empty()) {
+            let full_ref: gix::refs::FullName = target_ref_str.try_into()?;
+            but_workspace::legacy::push::execute_pushed_workspace_setup_from_ref(
+                &repo,
+                &project_meta,
+                full_ref.as_ref(),
+                push_remote.as_deref(),
+                &mut meta,
+            )?
+        } else {
+            but_workspace::legacy::push::execute_pushed_workspace_update(
+                &repo,
+                &project_meta,
+                &mut meta,
+            )?
+        }
+    };
+    ctx.set_project_meta(updated_project_meta)?;
+    ctx.reload_repo_and_invalidate_workspace(guard.write_permission())?;
+    Ok(plan)
+}
+
 /// Perform only the Git push portion of [`workspace_branch_and_ancestors_push()`].
 pub fn workspace_branch_and_ancestors_push_only(
     ctx: &mut Context,

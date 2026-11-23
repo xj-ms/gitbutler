@@ -41,6 +41,7 @@ export function buildBranchEndpoints(build: BackendEndpointBuilder) {
 			}),
 			invalidatesTags: [
 				invalidatesType(ReduxTag.WorkspaceFetchStatus),
+				invalidatesType(ReduxTag.BaseBranchData),
 				invalidatesList(ReduxTag.Stacks),
 				invalidatesList(ReduxTag.StackDetails),
 			],

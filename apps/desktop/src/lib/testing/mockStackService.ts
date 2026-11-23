@@ -88,6 +88,15 @@ export function getStackServiceMock() {
 	StackServiceMock.prototype.updateStack = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.updateStackOrder = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.pushStack = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
+	// [gix-merge-insert-order: 10]
+	StackServiceMock.prototype.pushedWorkspaceUpdatePlan = vi.fn(() => {
+		return reactive(() => mockReduxFulfilled(null));
+	});
+	StackServiceMock.prototype.fetchPushedWorkspaceUpdatePlan = vi.fn();
+	StackServiceMock.prototype.updatePushedWorkspace = [
+		vi.fn(),
+		reactive(() => mockReduxFulfilled({})),
+	];
 	StackServiceMock.prototype.createCommit = [vi.fn(), reactive(() => mockReduxFulfilled({}))];
 	StackServiceMock.prototype.updateCommitMessage = [
 		vi.fn(),

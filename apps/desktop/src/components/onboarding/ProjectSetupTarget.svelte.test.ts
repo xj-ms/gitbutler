@@ -1,16 +1,20 @@
 import ProjectSetupTarget from "$components/onboarding/ProjectSetupTarget.svelte";
 import { GIT_CONFIG_SERVICE } from "$lib/config/gitConfigService";
 import { PROJECTS_SERVICE } from "$lib/project/projectsService";
+import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 import { POSTHOG_WRAPPER } from "$lib/telemetry/posthog";
 import { render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 
 function renderTarget(
-	onBranchSelected: (branch: [branchName: string, pushRemote: string | undefined]) => Promise<void>,
+	onBranchSelected: (
+		branch: [branchName: string, pushRemote: string | undefined, restorePushedWorkspace?: boolean],
+	) => Promise<void>,
 	onOpenProject = vi.fn(async () => false),
 	remoteBranches = [{ name: "origin/main" }],
 	notice?: string,
+	setupPlan: any = null,
 ) {
 	const context = new Map<any, any>([
 		[
@@ -29,6 +33,12 @@ function renderTarget(
 				fetchProjects: vi.fn(),
 				projects: () => ({ response: [{ id: "project-id", title: "Repository" }] }),
 				serverCapabilities: () => ({ response: { canAddProjects: true } }),
+			},
+		],
+		[
+			STACK_SERVICE._key,
+			{
+				pushedWorkspaceUpdatePlan: () => ({ response: setupPlan }),
 			},
 		],
 		[POSTHOG_WRAPPER._key, { captureOnboarding: vi.fn() }],
@@ -164,4 +174,42 @@ test("shows an actionable target error and permits a retry", async () => {
 
 	await user.click(submit);
 	expect(onBranchSelected).toHaveBeenCalledTimes(2);
+});
+
+test("offers to restore a pushed GitButler workspace when the selected branch is a valid workspace commit", async () => {
+	const onBranchSelected = vi.fn();
+	renderTarget(
+		onBranchSelected,
+		vi.fn(async () => false),
+		[{ name: "origin/release" }],
+		undefined,
+		{
+			upstreamRefName: "refs/remotes/origin/release",
+			remoteName: "origin",
+			oldWorkspaceSha: "1111111111111111111111111111111111111111",
+			newWorkspaceSha: "2222222222222222222222222222222222222222",
+			target: {
+				oldRefName: null,
+				newRefName: "refs/tags/0.23.3-fork-base",
+				oldRefSha: "3333333333333333333333333333333333333333",
+				oldTargetCommitId: null,
+				newTargetCommitId: "3333333333333333333333333333333333333333",
+			},
+			branches: [
+				{
+					name: "fork/push-all",
+					oldSha: null,
+					newSha: "4444444444444444444444444444444444444444",
+				},
+			],
+			hasUncommittedChanges: false,
+			uncommittedFiles: [],
+		},
+	);
+
+	expect(screen.getByText(/Restore pushed GitButler workspace from/)).toBeInTheDocument();
+	expect(screen.getByText(/0\.23\.3-fork-base/)).toBeInTheDocument();
+
+	await userEvent.setup().click(screen.getByRole("button", { name: "Let's go" }));
+	expect(onBranchSelected).toHaveBeenCalledWith(["refs/heads/release", "origin", true]);
 });

@@ -2,6 +2,8 @@
 	import { goto } from "$app/navigation";
 	import CreateBranchModal from "$components/branch/CreateBranchModal.svelte";
 	import SyncButton from "$components/forge/SyncButton.svelte";
+	// [gix-merge-insert-order: -10]
+	import UpdatePushedWorkspaceModal from "$components/forge/UpdatePushedWorkspaceModal.svelte";
 	import IntegrateUpstreamModal from "$components/upstream/IntegrateUpstreamModal.svelte";
 	import { BACKEND } from "$lib/backend";
 	import { BASE_BRANCH_SERVICE } from "$lib/baseBranch/baseBranchService.svelte";
@@ -75,6 +77,31 @@
 	const upstreamCommits = $derived(base?.behind ?? 0);
 	const worktreesBehind = $derived(base?.worktreesBehind.length ?? 0);
 	const needsUpdate = $derived(!!base?.workspaceBehind || worktreesBehind > 0);
+	const workspaceTimeDiffSecs = $derived(base?.pushedWorkspaceTimeDiffSecs ?? null);
+	const needsWorkspaceUpdate = $derived(workspaceTimeDiffSecs !== null);
+	const workspaceUpdateLabel = $derived.by(() => {
+		if (workspaceTimeDiffSecs === null) return "Update workspace";
+		const absSecs = Math.abs(workspaceTimeDiffSecs);
+		if (absSecs < 60) {
+			return workspaceTimeDiffSecs >= 0 ? "Workspace <1m behind" : "Workspace <1m ahead";
+		}
+		const mins = Math.round(absSecs / 60);
+		let duration: string;
+		if (mins < 60) {
+			duration = `${mins}m`;
+		} else {
+			const hours = Math.round(mins / 60);
+			if (hours < 24) {
+				duration = `${hours}h`;
+			} else {
+				const days = Math.round(hours / 24);
+				duration = `${days}d`;
+			}
+		}
+		return workspaceTimeDiffSecs >= 0
+			? `Workspace ${duration} behind`
+			: `Workspace ${duration} ahead`;
+	});
 	const updateLabel = $derived.by(() => {
 		if (upstreamCommits > 0)
 			return `${upstreamCommits} upstream ${upstreamCommits === 1 ? "commit" : "commits"}`;
@@ -83,6 +110,7 @@
 	});
 
 	let modal = $state<ReturnType<typeof IntegrateUpstreamModal>>();
+	let updatePushedWorkspaceModal = $state<ReturnType<typeof UpdatePushedWorkspaceModal>>();
 
 	const projects = $derived(projectsService.projects());
 
@@ -164,6 +192,10 @@
 		modal?.show();
 	}
 
+	function openUpdatePushedWorkspaceModal() {
+		updatePushedWorkspaceModal?.show();
+	}
+
 	let createBranchModal = $state<CreateBranchModal>();
 
 	$effect(() => shortcutService.on("create-branch", () => createBranchModal?.show()));
@@ -174,6 +206,7 @@
 
 {#if projectId}
 	<IntegrateUpstreamModal bind:this={modal} {projectId} />
+	<UpdatePushedWorkspaceModal bind:this={updatePushedWorkspaceModal} {projectId} />
 {/if}
 
 <div
@@ -197,7 +230,27 @@
 						{updateLabel}
 					</Button>
 				</Tooltip>
-			{:else}
+			{/if}
+
+			{#if needsWorkspaceUpdate}
+				<Tooltip
+					text={isDetached
+						? "HEAD is detached"
+						: "Reset workspace and applied branches to match the pushed upstream workspace"}
+				>
+					<Button
+						testId={TestId.UpdatePushedWorkspaceButton}
+						kind="outline"
+						icon="branch"
+						onclick={openUpdatePushedWorkspaceModal}
+						disabled={!projectId || actionsDisabled || isDetached}
+					>
+						{workspaceUpdateLabel}
+					</Button>
+				</Tooltip>
+			{/if}
+
+			{#if !needsUpdate && !needsWorkspaceUpdate}
 				<div class="chrome-you-are-up-to-date">
 					<Icon name="tick" />
 					<span class="text-12">You’re up to date</span>

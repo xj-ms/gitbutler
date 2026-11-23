@@ -184,6 +184,8 @@ mod tests {
             conflicted: false,
             target_sha_ahead_of_ref: false,
             short_name: "main".to_string(),
+            // [gix-merge-insert-order: 10]
+            pushed_workspace_time_diff_secs: None,
         }
     }
 

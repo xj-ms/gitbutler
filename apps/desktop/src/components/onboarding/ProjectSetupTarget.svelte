@@ -9,10 +9,11 @@
 	import { GIT_CONFIG_SERVICE } from "$lib/config/gitConfigService";
 	import { classify, type ClassifiedError } from "$lib/error/errorClassification";
 	import { PROJECTS_SERVICE } from "$lib/project/projectsService";
+	import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 	import { combineResults } from "$lib/state/helpers";
 	import { OnboardingEvent, POSTHOG_WRAPPER } from "$lib/telemetry/posthog";
 	import { unique } from "$lib/utils/array";
-	import { inject } from "@gitbutler/core/context";
+	import { inject, injectOptional } from "@gitbutler/core/context";
 	import {
 		Button,
 		CardGroup,
@@ -34,7 +35,11 @@
 		remoteBranches: RemoteBranchInfo[];
 		localBranches: LocalTargetBranch[];
 		onBranchSelected: (
-			branch: [branchName: string, pushRemote: string | undefined],
+			branch: [
+				branchName: string,
+				pushRemote: string | undefined,
+				restorePushedWorkspace?: boolean,
+			],
 		) => Promise<void>;
 		onOpenProject: () => Promise<boolean>;
 		/**
@@ -57,6 +62,7 @@
 
 	const posthog = inject(POSTHOG_WRAPPER);
 	const gitConfig = inject(GIT_CONFIG_SERVICE);
+	const stackService = injectOptional(STACK_SERVICE, undefined);
 
 	const gbConfig = $derived(gitConfig.gbConfig(projectId));
 	const gerritMode = $derived(gbConfig.response?.gitbutlerGerritMode ?? false);
@@ -90,6 +96,26 @@
 	// The stored push remote can't be read while the target is unresolved, so it's left as is.
 	const replacingTarget = $derived(notice !== undefined);
 
+	const setupPlanQuery = $derived(
+		branch?.refName && !isTagSelected
+			? stackService?.pushedWorkspaceUpdatePlan(
+					projectId,
+					branch.refName,
+					replacingTarget ? undefined : remote,
+				)
+			: undefined,
+	);
+	const setupPlan = $derived(setupPlanQuery?.response ?? null);
+	let restorePushedWorkspace = $state<boolean>(true);
+	let lastPlanBranchRef = $state<string | undefined>(undefined);
+	$effect(() => {
+		const currentRef = branch?.refName;
+		if (currentRef !== lastPlanBranchRef) {
+			lastPlanBranchRef = currentRef;
+			restorePushedWorkspace = true;
+		}
+	});
+
 	async function onSetTargetClick() {
 		if (!branch || loading) return;
 		loading = true;
@@ -99,7 +125,12 @@
 				landDirectly: $landDirectly,
 			});
 			try {
-				await onBranchSelected([branch.refName, replacingTarget ? undefined : remote]);
+				const pushRemote = replacingTarget ? undefined : remote;
+				const shouldRestore = !!setupPlan && restorePushedWorkspace;
+				const args: [string, string | undefined, boolean?] = shouldRestore
+					? [branch.refName, pushRemote, true]
+					: [branch.refName, pushRemote];
+				await onBranchSelected(args);
 				targetWasSet = true;
 			} catch (error) {
 				const classified = classify(error);
@@ -164,6 +195,43 @@
 				<Link href="https://docs.gitbutler.com/overview#target-branch">Learn more</Link>
 			</p>
 		</div>
+		{#if setupPlan}
+			<div class="project-setup__field-wrap">
+				<label for="restorePushedWorkspace" class="land-directly">
+					<Checkbox
+						name="restorePushedWorkspace"
+						small
+						disabled={loading || targetWasSet}
+						bind:checked={restorePushedWorkspace}
+					/>
+					<span class="text-12 text-semibold">
+						Restore pushed GitButler workspace from <code class="code-string">{branch?.name}</code>
+					</span>
+				</label>
+				{#if restorePushedWorkspace}
+					<p class="text-12 text-body clr-text-2">
+						Restores {setupPlan.branches.length === 1
+							? "1 applied branch"
+							: `${setupPlan.branches.length} applied branches`} ({setupPlan.branches
+							.map((b) => b.name)
+							.join(", ")}) and sets the workspace base to
+						<code class="code-string"
+							>{setupPlan.target.newRefName.replace(/^refs\/(heads|tags)\//, "")}</code
+						>
+						({setupPlan.target.newTargetCommitId.slice(0, 10)}).
+					</p>
+					{#if setupPlan.hasUncommittedChanges}
+						<InfoMessage style="danger">
+							{#snippet content()}
+								Cannot restore workspace while tracked files have uncommitted changes ({setupPlan.uncommittedFiles.join(
+									", ",
+								)}).
+							{/snippet}
+						</InfoMessage>
+					{/if}
+				{/if}
+			</div>
+		{/if}
 
 		{#if remotes.length > 1 && !replacingTarget}
 			<div class="project-setup__field-wrap">
@@ -251,7 +319,8 @@
 		<Button
 			style="pop"
 			{loading}
-			disabled={!branch}
+			disabled={!branch ||
+				(!!setupPlan && restorePushedWorkspace && setupPlan.hasUncommittedChanges)}
 			onclick={onSetTargetClick}
 			icon="chevron-right"
 			testId={TestId.ProjectSetupPageTargetContinueButton}

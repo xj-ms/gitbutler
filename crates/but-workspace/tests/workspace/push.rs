@@ -388,6 +388,372 @@ fn pushing_top_of_stack_reports_top_as_pushed_after_bottom_is_current() -> anyho
 }
 
 #[test]
+fn pushed_workspace_update_plan_and_execution() -> anyhow::Result<()> {
+    let (_tmp, repo, mut meta) = fixture("push")?;
+    let (info, workspace) = head_info(&repo, &meta)?;
+    let mut db = but_db::DbHandle::new_at_path(":memory:")?;
+    let base_oid = repo.find_reference("refs/heads/main")?.peel_to_commit()?.id;
+    let project_meta = ProjectMeta {
+        target_ref: Some(but_core::ref_metadata::LocalRefName::new(
+            "refs/heads/main".try_into()?,
+        )?),
+        target_commit_id: Some(base_oid),
+        push_remote: None,
+    };
+
+    // Push workspace and branches to `origin/workspace-sync`.
+    but_workspace::legacy::push::workspace_push_all(
+        &repo,
+        &workspace,
+        &project_meta,
+        &info,
+        &mut db,
+        false,
+        "workspace-sync",
+        false,
+        false,
+        false,
+        false,
+        Vec::new(),
+    )?;
+
+    // Immediately after pushing, local `gitbutler/workspace` matches `refs/remotes/origin/workspace-sync`.
+    assert_eq!(
+        but_workspace::legacy::push::pushed_workspace_time_diff_secs(&repo, &project_meta)?,
+        None,
+        "workspace should not diverge immediately after pushing"
+    );
+    assert_eq!(
+        but_workspace::legacy::push::pushed_workspace_update_plan(&repo, &project_meta)?,
+        None
+    );
+
+    let pushed_ws_oid = repo
+        .find_reference("refs/remotes/origin/workspace-sync")?
+        .peel_to_commit()?
+        .id;
+    let pushed_top_oid = repo.find_reference("refs/heads/top")?.peel_to_commit()?.id;
+    let base_oid = repo.find_reference("refs/heads/main")?.peel_to_commit()?.id;
+
+    // Move local `refs/heads/top` and `refs/heads/gitbutler/workspace` back to an older commit (`main`)
+    // to simulate the local workspace being behind the pushed upstream workspace.
+    but_core::worktree::safe_checkout_from_head(
+        base_oid,
+        &repo,
+        but_core::worktree::checkout::Options {
+            skip_head_update: true,
+            ..Default::default()
+        },
+    )?;
+    repo.reference(
+        "refs/heads/top",
+        base_oid,
+        gix::refs::transaction::PreviousValue::Any,
+        "rewind top for test",
+    )?;
+    repo.reference(
+        "refs/heads/gitbutler/workspace",
+        base_oid,
+        gix::refs::transaction::PreviousValue::Any,
+        "rewind workspace for test",
+    )?;
+
+    assert!(
+        but_workspace::legacy::push::pushed_workspace_time_diff_secs(&repo, &project_meta)?
+            .is_some(),
+        "workspace should be detected as diverged when remote tracking ref points to newer managed workspace commit"
+    );
+
+    let plan = but_workspace::legacy::push::pushed_workspace_update_plan(&repo, &project_meta)?
+        .expect("plan should be available");
+    assert_eq!(plan.upstream_ref_name, "refs/remotes/origin/workspace-sync");
+    assert_eq!(plan.remote_name, "origin");
+    assert_eq!(plan.old_workspace_sha, base_oid.to_string());
+    assert_eq!(plan.new_workspace_sha, pushed_ws_oid.to_string());
+    assert!(
+        !plan.has_uncommitted_changes,
+        "expected clean worktree after rewind, got uncommitted files: {:?}",
+        plan.uncommitted_files
+    );
+    assert!(
+        plan.branches.iter().any(|b| b.name == "top"
+            && b.old_sha == Some(base_oid.to_string())
+            && b.new_sha == pushed_top_oid.to_string()),
+        "plan should include resetting `top` from base_oid to pushed_top_oid: {:?}",
+        plan.branches
+    );
+
+    // Staging a file should mark `has_uncommitted_changes = true` and block execution.
+    let workdir = repo.workdir().expect("non-bare repo");
+    let tracked_file = workdir.join("dirty.txt");
+    std::fs::write(&tracked_file, b"dirty content\n")?;
+    let add_status = std::process::Command::new("git")
+        .current_dir(workdir)
+        .args(["add", "dirty.txt"])
+        .status()?;
+    assert!(add_status.success());
+    let dirty_plan =
+        but_workspace::legacy::push::pushed_workspace_update_plan(&repo, &project_meta)?
+            .expect("plan should still return when dirty");
+    assert!(dirty_plan.has_uncommitted_changes);
+    assert_eq!(dirty_plan.uncommitted_files, vec!["dirty.txt".to_owned()]);
+    assert!(
+        but_workspace::legacy::push::execute_pushed_workspace_update(
+            &repo,
+            &project_meta,
+            &mut meta,
+        )
+        .is_err(),
+        "execution must fail when worktree has uncommitted tracked changes"
+    );
+
+    // Unstage and remove dirty file, then execute the update.
+    let reset_status = std::process::Command::new("git")
+        .current_dir(workdir)
+        .args(["rm", "-f", "dirty.txt"])
+        .status()?;
+    assert!(reset_status.success());
+    let (executed_plan, updated_meta) =
+        but_workspace::legacy::push::execute_pushed_workspace_update(
+            &repo,
+            &project_meta,
+            &mut meta,
+        )?;
+    assert_eq!(executed_plan.new_workspace_sha, pushed_ws_oid.to_string());
+    assert_eq!(updated_meta.push_remote.as_deref(), Some("origin"));
+    assert_eq!(
+        repo.find_reference("refs/heads/gitbutler/workspace")?
+            .peel_to_commit()?
+            .id,
+        pushed_ws_oid
+    );
+    assert_eq!(
+        repo.find_reference("refs/heads/top")?.peel_to_commit()?.id,
+        pushed_top_oid
+    );
+    assert_eq!(
+        but_workspace::legacy::push::pushed_workspace_time_diff_secs(&repo, &updated_meta)?,
+        None,
+        "workspace should no longer diverge after executing update"
+    );
+
+    // Also verify setting up a workspace from a selected branch (`refs/heads/fork-master`)
+    // when starting from a fresh / unconfigured `ProjectMeta::default()`.
+    repo.reference(
+        "refs/heads/fork-master",
+        pushed_ws_oid,
+        gix::refs::transaction::PreviousValue::Any,
+        "create local fork-master at pushed workspace commit",
+    )?;
+    repo.reference(
+        "refs/heads/top",
+        base_oid,
+        gix::refs::transaction::PreviousValue::Any,
+        "rewind top before setup test",
+    )?;
+    let empty_project_meta = but_core::ref_metadata::ProjectMeta::default();
+    let fork_master_ref: gix::refs::FullName = "refs/heads/fork-master".try_into()?;
+    let setup_plan = but_workspace::legacy::push::pushed_workspace_setup_plan_for_ref(
+        &repo,
+        &empty_project_meta,
+        fork_master_ref.as_ref(),
+        Some("origin"),
+    )?
+    .expect("setup plan should be returned for a branch pointing to a managed workspace commit");
+    assert_eq!(setup_plan.new_workspace_sha, pushed_ws_oid.to_string());
+    assert!(setup_plan.branches.iter().any(|b| b.name == "top"));
+
+    let (_executed_setup, setup_meta) =
+        but_workspace::legacy::push::execute_pushed_workspace_setup_from_ref(
+            &repo,
+            &empty_project_meta,
+            fork_master_ref.as_ref(),
+            Some("origin"),
+            &mut meta,
+        )?;
+    assert_eq!(setup_meta.push_remote.as_deref(), Some("origin"));
+    assert_eq!(
+        but_workspace::legacy::push::workspace_remote_branch(&repo)?.as_deref(),
+        Some("fork-master")
+    );
+    assert_eq!(
+        repo.find_reference("refs/heads/top")?.peel_to_commit()?.id,
+        pushed_top_oid
+    );
+    assert_eq!(
+        repo.head()?
+            .referent_name()
+            .map(|n| n.as_bstr().to_string()),
+        Some("refs/heads/gitbutler/workspace".to_owned())
+    );
+
+    // 7. Submodule update: when the pushed workspace commit modifies a submodule gitlink (`160000`),
+    // `pushed_workspace_update_plan` lists it in `plan.submodules` and `execute_pushed_workspace_update`
+    // updates the submodule worktree to the new gitlink SHA.
+    let sub_remote_dir = _tmp.path().join("sub-update-remote.git");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--bare", sub_remote_dir.to_str().unwrap()])
+            .status()?
+            .success()
+    );
+    let sub_workdir = workdir.join("sub");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", sub_workdir.to_str().unwrap()])
+            .status()?
+            .success()
+    );
+    for args in [
+        vec!["config", "user.name", "Test"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["checkout", "-b", "main"],
+        vec![
+            "remote",
+            "add",
+            "origin",
+            sub_remote_dir.to_str().unwrap(),
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&sub_workdir)
+                .args(&args)
+                .status()?
+                .success()
+        );
+    }
+    std::fs::write(sub_workdir.join("sub.txt"), b"v1\n")?;
+    for args in [
+        vec!["add", "sub.txt"],
+        vec!["commit", "-m", "sub v1"],
+        vec!["push", "origin", "main"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&sub_workdir)
+                .args(&args)
+                .status()?
+                .success()
+        );
+    }
+    let sub_v1_oid = gix::open(&sub_workdir)?.head_id()?.detach();
+
+    std::fs::write(sub_workdir.join("sub.txt"), b"v2\n")?;
+    for args in [
+        vec!["add", "sub.txt"],
+        vec!["commit", "-m", "sub v2"],
+        vec!["push", "origin", "main"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&sub_workdir)
+                .args(&args)
+                .status()?
+                .success()
+        );
+    }
+    let sub_v2_oid = gix::open(&sub_workdir)?.head_id()?.detach();
+
+    std::fs::write(
+        workdir.join(".gitmodules"),
+        format!(
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = {}\n",
+            sub_remote_dir.display().to_string().replace('\\', "/")
+        ),
+    )?;
+    // Record sub v1 on the local workspace commit first so `sub` is already a tracked submodule
+    for args in [
+        vec![
+            "config",
+            "submodule.sub.url",
+            sub_remote_dir.to_str().unwrap(),
+        ],
+        vec![
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{sub_v1_oid},sub"),
+        ],
+        vec!["add", ".gitmodules"],
+        vec!["commit", "--amend", "--no-edit"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(workdir)
+                .args(&args)
+                .status()?
+                .success()
+        );
+    }
+    let repo = gix::open(repo.path())?;
+    let ws_with_sub_v1_oid = repo.head_id()?.detach();
+
+    // Advance the upstream workspace commit to sub v2 (keeping the same managed parents)
+    for args in [
+        vec![
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{sub_v2_oid},sub"),
+        ],
+        vec!["commit", "--amend", "--no-edit"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(workdir)
+                .args(&args)
+                .status()?
+                .success()
+        );
+    }
+    let repo = gix::open(repo.path())?;
+    let ws_with_sub_oid = repo.head_id()?.detach();
+    repo.reference(
+        "refs/remotes/origin/fork-master",
+        ws_with_sub_oid,
+        gix::refs::transaction::PreviousValue::Any,
+        "advance remote workspace commit with submodule",
+    )?;
+    // Rewind local workspace to ws_with_sub_v1_oid and rewind submodule worktree to sub_v1_oid
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(workdir)
+            .args(["reset", "--hard", &ws_with_sub_v1_oid.to_string()])
+            .status()?
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&sub_workdir)
+            .args(["checkout", "--detach", &sub_v1_oid.to_string()])
+            .status()?
+            .success()
+    );
+
+    let repo = gix::open(repo.path())?;
+    let sub_plan =
+        but_workspace::legacy::push::pushed_workspace_update_plan(&repo, &setup_meta)?
+            .expect("plan should be eligible when upstream workspace commit has submodule update");
+    assert_eq!(
+        sub_plan.submodules,
+        vec![but_workspace::legacy::push::PushedWorkspaceBranchUpdate {
+            name: "sub".to_owned(),
+            old_sha: Some(sub_v1_oid.to_string()),
+            new_sha: sub_v2_oid.to_string(),
+        }]
+    );
+
+    but_workspace::legacy::push::execute_pushed_workspace_update(&repo, &setup_meta, &mut meta)?;
+    let updated_sub_oid = gix::open(&sub_workdir)?.head_id()?.detach();
+    assert_eq!(
+        updated_sub_oid, sub_v2_oid,
+        "submodule worktree should be updated to sub_v2_oid after execute_pushed_workspace_update"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn force_push_protection_is_observed_when_pushing_bottom_branch() -> anyhow::Result<()> {
     let (_tmp, repo, meta) = fixture("push-requiring-force")?;
     let (info, _) = head_info(&repo, &meta)?;

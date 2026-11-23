@@ -18,5 +18,7 @@ export function getMockBaseBranch(): BaseBranch {
 		conflicted: false,
 		targetShaAheadOfRef: false,
 		shortName: "mock-branch",
+		// [gix-merge-insert-order: 10]
+		pushedWorkspaceTimeDiffSecs: null,
 	};
 }

@@ -63,6 +63,33 @@ import type {
 	PushResult,
 } from "@gitbutler/but-sdk";
 
+// [gix-merge-insert-order: 10]
+export type PushedWorkspaceBranchUpdate = {
+	name: string;
+	oldSha: string | null;
+	newSha: string;
+};
+
+export type PushedWorkspaceTargetUpdate = {
+	oldRefName: string | null;
+	newRefName: string;
+	oldRefSha: string | null;
+	oldTargetCommitId: string | null;
+	newTargetCommitId: string;
+};
+
+export type PushedWorkspaceUpdatePlan = {
+	upstreamRefName: string;
+	remoteName: string;
+	oldWorkspaceSha: string;
+	newWorkspaceSha: string;
+	target: PushedWorkspaceTargetUpdate;
+	branches: PushedWorkspaceBranchUpdate[];
+	submodules: PushedWorkspaceBranchUpdate[];
+	hasUncommittedChanges: boolean;
+	uncommittedFiles: string[];
+};
+
 /** Where a new commit goes: `side` of `relativeTo`. */
 export type CommitPlacement = {
 	relativeTo: RelativeTo;
@@ -366,6 +393,36 @@ export function buildStackEndpoints(build: BackendEndpointBuilder) {
 				invalidatesItem(ReduxTag.StackDetails, args.stackId),
 				invalidatesList(ReduxTag.StackDetails),
 				invalidatesList(ReduxTag.BranchListing),
+			],
+		}),
+		// [gix-merge-insert-order: 10]
+		pushedWorkspaceUpdatePlan: build.query<
+			PushedWorkspaceUpdatePlan | null,
+			{ projectId: string; targetRef?: string; pushRemote?: string }
+		>({
+			extraOptions: { command: "pushed_workspace_update_plan" },
+			query: (args) => args,
+			providesTags: [providesList(ReduxTag.Stacks), providesList(ReduxTag.HeadSha)],
+		}),
+		updatePushedWorkspace: build.mutation<
+			PushedWorkspaceUpdatePlan,
+			{ projectId: string; targetRef?: string; pushRemote?: string }
+		>({
+			extraOptions: {
+				command: "update_pushed_workspace",
+				actionName: "Update Pushed Workspace",
+			},
+			query: (args) => args,
+			invalidatesTags: [
+				invalidatesList(ReduxTag.HeadSha),
+				invalidatesList(ReduxTag.HeadMetadata),
+				invalidatesList(ReduxTag.WorktreeChanges),
+				invalidatesList(ReduxTag.Stacks),
+				invalidatesList(ReduxTag.StackDetails),
+				invalidatesList(ReduxTag.BranchListing),
+				invalidatesType(ReduxTag.BaseBranchData),
+				invalidatesType(ReduxTag.ForgeProvider),
+				invalidatesList(ReduxTag.PullRequests),
 			],
 		}),
 		/** Commit `changes` from `checkout`, the main one by default. */

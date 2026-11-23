@@ -380,6 +380,9 @@ fn main() -> anyhow::Result<()> {
                 legacy::workspace::tauri_branch_details::branch_details,
                 legacy::workspace::tauri_discard_worktree_changes::discard_worktree_changes,
                 legacy::workspace::tauri_stash_into_branch::stash_into_branch,
+                // [gix-merge-insert-order: 10]
+                legacy::workspace::tauri_pushed_workspace_update_plan::pushed_workspace_update_plan,
+                legacy::workspace::tauri_update_pushed_workspace::update_pushed_workspace,
                 legacy::workspace::tauri_workspace_branch_and_ancestors_push::workspace_branch_and_ancestors_push,
                 legacy::absorb::tauri_absorb::absorb,
                 legacy::absorb::tauri_absorption_plan::absorption_plan,
