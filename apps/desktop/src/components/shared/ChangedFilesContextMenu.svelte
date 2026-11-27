@@ -1,5 +1,7 @@
 <!-- This is a V3 replacement for `FileContextMenu.svelte` -->
 <script lang="ts">
+	// [gix-merge-insert-order: 10]
+	import StageOrAmendSubmenu from "$components/shared/StageOrAmendSubmenu.svelte";
 	import AbsorbPlanModal from "$components/stack/AbsorbPlanModal.svelte";
 	import DiscardChangesModal from "$components/workspace/DiscardChangesModal.svelte";
 	import StashIntoBranchModal from "$components/workspace/StashIntoBranchModal.svelte";
@@ -91,7 +93,7 @@
 	const clipboardService = inject(CLIPBOARD_SERVICE);
 	const [, absorbingChanges] = stackService.absorb;
 
-	// Stashing and absorbing work on the main checkout only.
+	// Stashing, absorbing, and stack assignment/amending work on the main checkout only.
 	const inMainCheckout = $derived(
 		selectionId.type === "worktree" && selectionId.worktree === undefined,
 	);
@@ -195,6 +197,18 @@
 			{#if item.changes.length > 0 && !editMode}
 				<ContextMenuSection>
 					{@const changes = item.changes}
+					{#if inMainCheckout}
+						<StageOrAmendSubmenu
+							{projectId}
+							{stackId}
+							{selectionId}
+							target={{ type: "files", changes }}
+							testId={TestId.FileListItemContextMenu_StageOrAmend}
+							onaction={() => {
+								menuOpen = false;
+							}}
+						/>
+					{/if}
 					{#if selectionId.type === "worktree"}
 						<ContextMenuItem
 							label="Discard changes…"

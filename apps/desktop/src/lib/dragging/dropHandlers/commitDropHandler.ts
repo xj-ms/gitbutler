@@ -1,4 +1,5 @@
-import { changesToDiffSpec } from "$lib/commits/utils";
+import { runAmendWorktreeChanges } from "$lib/commits/stageOrAmend.svelte";
+import { changesToDiffSpec, hunkToDiffSpec } from "$lib/commits/utils";
 import {
 	FileChangeDropData,
 	FolderChangeDropData,
@@ -6,10 +7,9 @@ import {
 	type ChangeDropData,
 } from "$lib/dragging/draggables";
 import { classify } from "$lib/error/errorClassification";
-import { HookFailedError, HOOKS_SERVICE } from "$lib/git/hooksService";
+import { HOOKS_SERVICE } from "$lib/git/hooksService";
 import { laneIdOf } from "$lib/linkedWorktrees/lane";
 import { toCommitMovePlacement } from "$lib/stacks/commitMovePlacement";
-import { rejectedChangesByPath, type CreateCommitOutcome } from "$lib/stacks/stackEndpoints";
 import { STACK_SERVICE } from "$lib/stacks/stackService.svelte";
 import { UI_STATE, withStackBusy, type UiState } from "$lib/state/uiState.svelte";
 import { inject } from "@gitbutler/core/context";
@@ -185,36 +185,19 @@ export class AmendCommitWithChangeDzHandler implements DropzoneHandler {
 			case "worktree": {
 				const assignments = data.assignments();
 				const worktreeChanges = changesToDiffSpec(await data.treeChanges(), assignments);
-
-				if (this.runHooks) {
-					try {
-						await this.hooksService.runPreCommitHooks(this.projectId, worktreeChanges);
-					} catch (err) {
-						if (err instanceof HookFailedError) return { type: "ok" };
-						return { type: "error", title: "Git hook failed", error: err };
-					}
-				}
-
-				const outcome = await this.stackService.amendCommitMutation({
+				const { dropResult } = await runAmendWorktreeChanges({
 					projectId: this.projectId,
 					stackId: this.stackId,
 					worktree: this.worktree,
 					commitId: this.commit.id,
-					worktreeChanges: worktreeChanges,
-					dryRun: false,
+					worktreeChanges,
+					runHooks: this.runHooks,
+					hooksService: this.hooksService,
+					stackService: this.stackService,
+					uiState: this.uiState,
+					onNewCommit: this.onresult,
 				});
-
-				if (outcome.newCommit) {
-					this.onresult(outcome.newCommit);
-				}
-
-				const rejectionResult = toRejectedChangesResult(this.projectId, outcome);
-
-				if (this.runHooks) {
-					await this.hooksService.runPostCommitHooks(this.projectId);
-				}
-
-				return rejectionResult;
+				return dropResult;
 			}
 		}
 	}
@@ -351,6 +334,7 @@ export class AmendCommitWithHunkDzHandler implements DropzoneHandler {
 			stackId: string;
 			commit: DzCommitData;
 			runHooks: boolean;
+			onresult?: (result: string) => void;
 		},
 	) {}
 
@@ -367,13 +351,10 @@ export class AmendCommitWithHunkDzHandler implements DropzoneHandler {
 	}
 
 	async ondrop(data: HunkDropDataV3): Promise<DropResult | void> {
-		const { projectId, stackId, commit, okWithForce, runHooks } = this.args;
+		const { projectId, stackId, commit, okWithForce, runHooks, onresult } = this.args;
 		if (!okWithForce && commit.isRemote) return;
 
 		if (data instanceof HunkDropDataV3) {
-			const previousPathBytes =
-				data.change.status.type === "Rename" ? data.change.status.subject.previousPathBytes : null;
-
 			if (!data.uncommitted) {
 				if (!(data.stackId && data.commitId)) {
 					throw new Error("Can't receive a change without it's source or commit");
@@ -393,20 +374,7 @@ export class AmendCommitWithHunkDzHandler implements DropzoneHandler {
 							destinationCommitId: commit.id,
 							sourceStackId,
 							sourceCommitId,
-							changes: [
-								{
-									previousPathBytes,
-									pathBytes: data.change.pathBytes,
-									hunkHeaders: [
-										{
-											oldStart: data.hunk.oldStart,
-											oldLines: data.hunk.oldLines,
-											newStart: data.hunk.newStart,
-											newLines: data.hunk.newLines,
-										},
-									],
-								},
-							],
+							changes: [hunkToDiffSpec(data.change, data.hunk)],
 							dryRun: false,
 						});
 
@@ -419,44 +387,18 @@ export class AmendCommitWithHunkDzHandler implements DropzoneHandler {
 				return;
 			}
 
-			const worktreeChanges = [
-				{
-					previousPathBytes,
-					pathBytes: data.change.pathBytes,
-					hunkHeaders: [
-						{
-							oldStart: data.hunk.oldStart,
-							oldLines: data.hunk.oldLines,
-							newStart: data.hunk.newStart,
-							newLines: data.hunk.newLines,
-						},
-					],
-				},
-			];
-
-			if (runHooks) {
-				try {
-					await this.hooksService.runPreCommitHooks(projectId, worktreeChanges);
-				} catch (err) {
-					if (err instanceof HookFailedError) return { type: "ok" };
-					return { type: "error", title: "Git hook failed", error: err };
-				}
-			}
-			const outcome = await this.stackService.amendCommitMutation({
+			const { dropResult } = await runAmendWorktreeChanges({
 				projectId,
 				stackId,
 				commitId: commit.id,
-				worktreeChanges,
-				dryRun: false,
+				worktreeChanges: [hunkToDiffSpec(data.change, data.hunk)],
+				runHooks,
+				hooksService: this.hooksService,
+				stackService: this.stackService,
+				uiState: this.uiState,
+				onNewCommit: onresult,
 			});
-
-			const rejectionResult = toRejectedChangesResult(projectId, outcome);
-
-			if (runHooks) {
-				await this.hooksService.runPostCommitHooks(projectId);
-			}
-
-			return rejectionResult;
+			return dropResult;
 		}
 	}
 }
@@ -510,22 +452,6 @@ export class SquashCommitDzHandler implements DropzoneHandler {
 			);
 		}
 	}
-}
-
-function toRejectedChangesResult(
-	projectId: string,
-	outcome: CreateCommitOutcome,
-): DropResult | undefined {
-	if (outcome.rejectedChanges.length === 0) return undefined;
-
-	return {
-		type: "rejectedChanges",
-		projectId,
-		newCommitId: outcome.newCommit ?? undefined,
-		commitTitle: undefined,
-		targetBranchName: "",
-		pathsToRejectedChanges: rejectedChangesByPath(outcome),
-	};
 }
 
 function updateUiState(
@@ -597,6 +523,9 @@ export function createCommitDropHandlers(args: {
 		commit,
 		okWithForce,
 		runHooks: args.runHooks,
+		onresult: (newId) => {
+			onCommitIdChange?.(newId);
+		},
 	});
 
 	return {

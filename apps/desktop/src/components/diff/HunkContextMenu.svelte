@@ -1,4 +1,5 @@
 <script lang="ts" module>
+	import StageOrAmendSubmenu from "$components/shared/StageOrAmendSubmenu.svelte";
 	import type { DiffHunk } from "@gitbutler/but-sdk";
 	export interface HunkContextItem {
 		hunk: DiffHunk;
@@ -61,11 +62,23 @@
 	const fileService = inject(FILE_SERVICE);
 
 	const defaultCodeEditor = uiState.global.defaultCodeEditor;
+	const inMainCheckout = $derived(
+		selectionId.type === "worktree" && selectionId.worktree === undefined,
+	);
 
 	const filePath = $derived(change.path);
 	let menuOpen = $state(false);
 	let menuTarget = $state<MouseEvent | HTMLElement>();
 	let menuItem = $state<HunkContextItem>();
+
+	function getAmendLineLabel(item: HunkContextItem) {
+		const { selectedLines } = item;
+
+		if (selectedLines !== undefined && selectedLines.length > 0)
+			return `Amend with ${selectedLines.length} selected lines`;
+
+		return "";
+	}
 
 	function getDiscardLineLabel(item: HunkContextItem) {
 		const { selectedLines } = item;
@@ -173,6 +186,43 @@
 		{#if isHunkContextItem(item)}
 			{#if discardable}
 				<ContextMenuSection>
+					{#if inMainCheckout}
+						<StageOrAmendSubmenu
+							{projectId}
+							{stackId}
+							{selectionId}
+							target={{
+								type: "hunk",
+								change,
+								hunk: item.hunk,
+								unselectHunkLines: unselectAllHunkLines,
+							}}
+							testId={TestId.HunkContextMenu_StageOrAmend}
+							onaction={() => {
+								menuOpen = false;
+							}}
+						/>
+						{#if item.selectedLines !== undefined && item.selectedLines.length > 0 && change.status.type !== "Deletion"}
+							<StageOrAmendSubmenu
+								{projectId}
+								{stackId}
+								{selectionId}
+								label={getAmendLineLabel(item)}
+								icon="checklist"
+								target={{
+									type: "lines",
+									change,
+									hunk: item.hunk,
+									selectedLines: item.selectedLines,
+									unselectHunkLines: unselectAllHunkLines,
+								}}
+								testId={TestId.HunkContextMenu_AmendLines}
+								onaction={() => {
+									menuOpen = false;
+								}}
+							/>
+						{/if}
+					{/if}
 					<ContextMenuItem
 						testId={TestId.HunkContextMenu_DiscardChange}
 						label="Discard change"
