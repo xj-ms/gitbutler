@@ -8,8 +8,9 @@ use but_core::git_config::edit_config;
 use but_error::{Code, Context};
 use but_llm::{
     AI_ANTHROPIC_SECRET_HANDLE, AI_OPENAI_SECRET_HANDLE, AiConfiguration as DomainConfiguration,
-    AnthropicConfiguration, CredentialsKeyOption, GITBUTLER_ACCESS_TOKEN_HANDLE, LLMProviderKind,
-    LmStudioConfiguration, OllamaConfiguration, OpenAiConfiguration,
+    AnthropicConfiguration, ChatMessage, CopilotConfiguration, CredentialsKeyOption,
+    DEFAULT_COPILOT_MODEL, GITBUTLER_ACCESS_TOKEN_HANDLE, LLMProvider, LLMProviderConfig,
+    LLMProviderKind, LmStudioConfiguration, OllamaConfiguration, OpenAiConfiguration,
 };
 use but_secret::{Sensitive, secret};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,8 @@ pub struct AiConfiguration {
     pub lmstudio_endpoint: String,
     /// The LM Studio model to request.
     pub lmstudio_model: String,
+    /// The GitHub Copilot model to request (`"default"` uses the CLI default).
+    pub copilot_model: String,
     /// Whether the active provider has everything it needs to answer.
     pub is_configured: bool,
     /// Whether nothing has been changed from the defaults and no key is stored, so a reset
@@ -80,7 +83,39 @@ pub struct AiConfigurationUpdate {
     pub lmstudio_endpoint: String,
     /// The LM Studio model to request.
     pub lmstudio_model: String,
+    /// The GitHub Copilot model to request (`"default"` uses the CLI default).
+    pub copilot_model: String,
 }
+
+/// Role of a message in a prompt sent to a local AI provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "export-schema", derive(schemars::JsonSchema))]
+pub enum AiPromptRole {
+    /// System instructions setting behavior and formatting expectations.
+    System,
+    /// User message content.
+    User,
+    /// Prior assistant turn content.
+    Assistant,
+}
+
+#[cfg(feature = "export-schema")]
+but_schemars::register_sdk_type!(AiPromptRole);
+
+/// A single message in an AI prompt conversation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "export-schema", derive(schemars::JsonSchema))]
+pub struct AiPromptMessage {
+    /// The message sender role.
+    pub role: AiPromptRole,
+    /// The message body text.
+    pub content: String,
+}
+
+#[cfg(feature = "export-schema")]
+but_schemars::register_sdk_type!(AiPromptMessage);
 
 fn has_secret(handle: &str, namespace: secret::Namespace) -> Result<bool> {
     Ok(secret::retrieve(handle, namespace)?.is_some())
@@ -120,6 +155,7 @@ fn get_configuration() -> Result<AiConfiguration> {
         ollama_model: configuration.ollama.model,
         lmstudio_endpoint: configuration.lmstudio.endpoint,
         lmstudio_model: configuration.lmstudio.model,
+        copilot_model: configuration.copilot.model,
         is_configured,
         is_default,
     })
@@ -131,7 +167,8 @@ fn provider(value: &str) -> Result<LLMProviderKind> {
             provider @ (LLMProviderKind::OpenAi
             | LLMProviderKind::Anthropic
             | LLMProviderKind::Ollama
-            | LLMProviderKind::LMStudio),
+            | LLMProviderKind::LMStudio
+            | LLMProviderKind::Copilot),
         ) => Ok(provider),
         _ => bail!("Unsupported AI provider '{value}'"),
     }
@@ -195,8 +232,56 @@ fn domain_configuration(
         endpoint: update.lmstudio_endpoint.clone(),
         model: update.lmstudio_model.clone(),
     };
+    configuration.copilot = CopilotConfiguration {
+        model: update.copilot_model.clone(),
+    };
     configuration.validate()?;
     Ok(configuration)
+}
+
+fn split_prompt_messages(messages: Vec<AiPromptMessage>) -> Result<(String, Vec<ChatMessage>)> {
+    if messages.is_empty() {
+        bail!("Prompt must contain at least one message");
+    }
+
+    let mut system_parts = Vec::new();
+    let mut chat_messages = Vec::new();
+    for message in messages {
+        match message.role {
+            AiPromptRole::System => {
+                if !message.content.trim().is_empty() {
+                    system_parts.push(message.content);
+                }
+            }
+            AiPromptRole::User => chat_messages.push(ChatMessage::User(message.content)),
+            AiPromptRole::Assistant => chat_messages.push(ChatMessage::Assistant(message.content)),
+        }
+    }
+
+    let mut system_message = system_parts.join("\n\n");
+    if chat_messages.is_empty() {
+        if system_message.is_empty() {
+            bail!("Prompt must contain non-empty message content");
+        }
+        chat_messages.push(ChatMessage::User(std::mem::take(&mut system_message)));
+    }
+
+    Ok((system_message, chat_messages))
+}
+
+fn resolve_copilot_model(model: Option<String>) -> String {
+    if let Some(model) = model {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(config) = gix::config(None, &gix::open::Options::default())
+        && let Ok(domain) = DomainConfiguration::from_git_config(&config)
+    {
+        return domain.copilot.model;
+    }
+    DEFAULT_COPILOT_MODEL.to_string()
 }
 
 /// Read application-global AI configuration without exposing stored secrets.
@@ -240,13 +325,33 @@ pub fn update_ai_configuration(update: AiConfigurationUpdate) -> Result<AiConfig
     get_configuration()
 }
 
+/// Evaluate a prompt through the local GitHub Copilot CLI (`copilot-sdk`), using existing CLI login.
+#[but_api]
+pub async fn ai_copilot_evaluate(
+    messages: Vec<AiPromptMessage>,
+    model: Option<String>,
+) -> Result<String> {
+    let (system_message, chat_messages) = split_prompt_messages(messages)?;
+    let resolved_model = resolve_copilot_model(model);
+
+    tokio::task::spawn_blocking(move || {
+        let provider = LLMProvider::new(LLMProviderConfig::Copilot(Some(resolved_model.clone())))
+            .context("Failed to initialize GitHub Copilot SDK provider")?;
+        let response = provider.response(&system_message, chat_messages, &resolved_model)?;
+        Ok(response.unwrap_or_default())
+    })
+    .await
+    .context("GitHub Copilot evaluation task failed")?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use but_llm::{
-        AI_LMSTUDIO_MODEL_NAME_KEY, AI_MODEL_PROVIDER_KEY, AI_OPENAI_CUSTOM_ENDPOINT_KEY,
-        DEFAULT_ANTHROPIC_MODEL, DEFAULT_LMSTUDIO_ENDPOINT, DEFAULT_LMSTUDIO_MODEL,
-        DEFAULT_OLLAMA_ENDPOINT, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL,
+        AI_COPILOT_MODEL_NAME_KEY, AI_LMSTUDIO_MODEL_NAME_KEY, AI_MODEL_PROVIDER_KEY,
+        AI_OPENAI_CUSTOM_ENDPOINT_KEY, DEFAULT_ANTHROPIC_MODEL, DEFAULT_COPILOT_MODEL,
+        DEFAULT_LMSTUDIO_ENDPOINT, DEFAULT_LMSTUDIO_MODEL, DEFAULT_OLLAMA_ENDPOINT,
+        DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL,
     };
 
     fn valid_update() -> AiConfigurationUpdate {
@@ -263,6 +368,7 @@ mod tests {
             ollama_model: DEFAULT_OLLAMA_MODEL.into(),
             lmstudio_endpoint: DEFAULT_LMSTUDIO_ENDPOINT.into(),
             lmstudio_model: DEFAULT_LMSTUDIO_MODEL.into(),
+            copilot_model: DEFAULT_COPILOT_MODEL.into(),
         }
     }
 
@@ -340,5 +446,37 @@ mod tests {
             DEFAULT_LMSTUDIO_MODEL,
             "the local model is persisted alongside the provider"
         );
+    }
+
+    #[test]
+    fn supports_copilot_provider_and_splits_prompt_messages() {
+        let mut update = valid_update();
+        update.provider = "copilot".into();
+        update.copilot_model = "gpt-4.1".into();
+        assert!(validate_update(&update, false, false).is_ok());
+
+        let mut config =
+            gix::config::File::new(gix::config::file::Metadata::from(gix::config::Source::User));
+        domain_configuration(&update, DomainConfiguration::default())
+            .unwrap()
+            .apply(&mut config)
+            .unwrap();
+
+        assert_eq!(config.string(AI_MODEL_PROVIDER_KEY).unwrap(), "copilot");
+        assert_eq!(config.string(AI_COPILOT_MODEL_NAME_KEY).unwrap(), "gpt-4.1");
+
+        let (sys, chat) = split_prompt_messages(vec![
+            AiPromptMessage {
+                role: AiPromptRole::System,
+                content: "Write concise commits.".into(),
+            },
+            AiPromptMessage {
+                role: AiPromptRole::User,
+                content: "Diff here".into(),
+            },
+        ])
+        .unwrap();
+        assert_eq!(sys, "Write concise commits.");
+        assert_eq!(chat.len(), 1);
     }
 }

@@ -13,17 +13,20 @@ but-core.workspace = true
 but-secret.workspace = true
 but-tools.workspace = true
 async-openai.workspace = true
+copilot-sdk.workspace = true
 serde.workspace = true
 futures = "0.3.31"
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "io-std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "io-util", "process", "sync", "macros", "fs"] }
 schemars.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 strum = { version = "0.27", features = ["derive"] }
 gix.workspace = true
 reqwest.workspace = true
+tempfile.workspace = true
 url.workspace = true
+which.workspace = true
 
 [lints]
 workspace = true

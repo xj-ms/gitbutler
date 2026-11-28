@@ -13,6 +13,7 @@ pub const AI_OLLAMA_ENDPOINT_KEY: &str = "gitbutler.aiOllamaEndpoint";
 pub const AI_OLLAMA_MODEL_NAME_KEY: &str = "gitbutler.aiOllamaModelName";
 pub const AI_LMSTUDIO_ENDPOINT_KEY: &str = "gitbutler.aiLMStudioEndpoint";
 pub const AI_LMSTUDIO_MODEL_NAME_KEY: &str = "gitbutler.aiLMStudioModelName";
+pub const AI_COPILOT_MODEL_NAME_KEY: &str = "gitbutler.aiCopilotModelName";
 pub const AI_OPENROUTER_MODEL_NAME_KEY: &str = "gitbutler.aiOpenRouterModelName";
 pub const AI_OPENROUTER_ENDPOINT_KEY: &str = "gitbutler.aiOpenRouterEndpoint";
 
@@ -27,6 +28,7 @@ pub const DEFAULT_OLLAMA_ENDPOINT: &str = "127.0.0.1:11434";
 pub const DEFAULT_OLLAMA_MODEL: &str = "llama3";
 pub const DEFAULT_LMSTUDIO_ENDPOINT: &str = "http://127.0.0.1:1234/v1";
 pub const DEFAULT_LMSTUDIO_MODEL: &str = "default";
+pub const DEFAULT_COPILOT_MODEL: &str = "default";
 pub const DEFAULT_OPENROUTER_MODEL: &str = "openai/gpt-4.1-mini";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,12 +57,18 @@ pub struct LmStudioConfiguration {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopilotConfiguration {
+    pub model: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiConfiguration {
     pub provider: LLMProviderKind,
     pub openai: OpenAiConfiguration,
     pub anthropic: AnthropicConfiguration,
     pub ollama: OllamaConfiguration,
     pub lmstudio: LmStudioConfiguration,
+    pub copilot: CopilotConfiguration,
 }
 
 impl Default for AiConfiguration {
@@ -83,6 +91,9 @@ impl Default for AiConfiguration {
             lmstudio: LmStudioConfiguration {
                 endpoint: DEFAULT_LMSTUDIO_ENDPOINT.into(),
                 model: DEFAULT_LMSTUDIO_MODEL.into(),
+            },
+            copilot: CopilotConfiguration {
+                model: DEFAULT_COPILOT_MODEL.into(),
             },
         }
     }
@@ -129,6 +140,9 @@ impl AiConfiguration {
                     .unwrap_or(defaults.lmstudio.endpoint),
                 model: values.lmstudio_model.unwrap_or(defaults.lmstudio.model),
             },
+            copilot: CopilotConfiguration {
+                model: values.copilot_model.unwrap_or(defaults.copilot.model),
+            },
         };
         Ok(configuration)
     }
@@ -138,6 +152,7 @@ impl AiConfiguration {
         required(&self.anthropic.model, "Anthropic model")?;
         required(&self.ollama.model, "Ollama model")?;
         required(&self.lmstudio.model, "LM Studio model")?;
+        required(&self.copilot.model, "Copilot model")?;
         validate_ollama_endpoint(&self.ollama.endpoint)?;
         validate_url(&self.lmstudio.endpoint, "LM Studio endpoint")?;
         if self.openai.key_option == CredentialsKeyOption::BringYourOwn
@@ -173,6 +188,9 @@ impl AiConfiguration {
                 required(&self.lmstudio.model, "LM Studio model")?;
                 validate_url(&self.lmstudio.endpoint, "LM Studio endpoint")?;
             }
+            LLMProviderKind::Copilot => {
+                required(&self.copilot.model, "Copilot model")?;
+            }
             LLMProviderKind::OpenRouter => {}
         }
         Ok(())
@@ -197,7 +215,7 @@ impl AiConfiguration {
                 CredentialsKeyOption::BringYourOwn => has_anthropic_key,
                 CredentialsKeyOption::ButlerApi => has_gitbutler_token,
             },
-            LLMProviderKind::Ollama | LLMProviderKind::LMStudio => true,
+            LLMProviderKind::Ollama | LLMProviderKind::LMStudio | LLMProviderKind::Copilot => true,
             LLMProviderKind::OpenRouter => false,
         }
     }
@@ -242,6 +260,7 @@ impl AiConfiguration {
             AI_LMSTUDIO_MODEL_NAME_KEY,
             self.lmstudio.model.trim(),
         )?;
+        set_config_value(config, AI_COPILOT_MODEL_NAME_KEY, self.copilot.model.trim())?;
         Ok(())
     }
 }
@@ -258,6 +277,7 @@ pub struct AiConfigurationSnapshot {
     pub ollama_model: Option<String>,
     pub lmstudio_endpoint: Option<String>,
     pub lmstudio_model: Option<String>,
+    pub copilot_model: Option<String>,
 }
 
 impl AiConfigurationSnapshot {
@@ -273,6 +293,7 @@ impl AiConfigurationSnapshot {
             ollama_model: config_value(config, AI_OLLAMA_MODEL_NAME_KEY),
             lmstudio_endpoint: config_value(config, AI_LMSTUDIO_ENDPOINT_KEY),
             lmstudio_model: config_value(config, AI_LMSTUDIO_MODEL_NAME_KEY),
+            copilot_model: config_value(config, AI_COPILOT_MODEL_NAME_KEY),
         }
     }
 }
@@ -338,6 +359,15 @@ pub fn apply_lmstudio_configuration(
     set_provider(config, LLMProviderKind::LMStudio)?;
     set_optional(config, AI_LMSTUDIO_ENDPOINT_KEY, endpoint)?;
     set_optional(config, AI_LMSTUDIO_MODEL_NAME_KEY, model)
+}
+
+pub fn apply_copilot_configuration(
+    config: &mut gix::config::File,
+    model: Option<&str>,
+) -> Result<()> {
+    validate_optional(model, "Copilot model")?;
+    set_provider(config, LLMProviderKind::Copilot)?;
+    set_optional(config, AI_COPILOT_MODEL_NAME_KEY, model)
 }
 
 pub fn apply_openrouter_configuration(
@@ -480,6 +510,20 @@ mod tests {
         assert!(
             !config.is_configured(false, false, false),
             "an invalid local provider is not configured"
+        );
+
+        let mut copilot_config = AiConfiguration {
+            provider: LLMProviderKind::Copilot,
+            ..Default::default()
+        };
+        assert!(
+            copilot_config.is_configured(false, false, false),
+            "Copilot uses CLI authentication and needs no GitButler API key"
+        );
+        copilot_config.copilot.model.clear();
+        assert!(
+            !copilot_config.is_configured(false, false, false),
+            "Copilot requires a non-empty model setting"
         );
     }
 }

@@ -21,6 +21,14 @@
 	let showSampleDiff = $state(false);
 	let testTimeout: NodeJS.Timeout | null = null;
 	let abortController: AbortController | null = null;
+	let activeRunId = 0;
+
+	function timeoutMsForModel(kind: ModelKind | undefined): number {
+		if (kind === ModelKind.Copilot || kind === ModelKind.Ollama || kind === ModelKind.LMStudio) {
+			return 60000;
+		}
+		return 20000;
+	}
 
 	// Simple test diff for commit message generation
 	const testDiff: DiffInput[] = [
@@ -37,6 +45,7 @@
 	];
 
 	async function testAiCredentials() {
+		const runId = ++activeRunId;
 		testing = true;
 		isStreaming = false;
 		result = null;
@@ -61,14 +70,17 @@
 		try {
 			// Get current model kind
 			modelKind = await aiService.getModelKind();
+			if (runId !== activeRunId) return;
 			debugInfo = `Model kind: ${modelKind}`;
 
 			// Check if using GitButler API
 			isUsingButlerAPI = await aiService.usingGitButlerAPI();
+			if (runId !== activeRunId) return;
 			debugInfo += `, Using GB API: ${isUsingButlerAPI}`;
 
 			// Check if configuration is valid
 			const isConfigValid = await aiService.validateConfiguration();
+			if (runId !== activeRunId) return;
 			debugInfo += `, Config valid: ${isConfigValid}`;
 
 			if (!isConfigValid) {
@@ -94,15 +106,19 @@
 
 			debugInfo += `, Testing commit message generation`;
 
+			const timeoutMs = timeoutMsForModel(modelKind);
+			const timeoutSeconds = Math.round(timeoutMs / 1000);
+
 			// Set a timeout to fail if the streaming doesn't start or complete
 			testTimeout = setTimeout(() => {
-				if (testing) {
-					console.error("AI response timed out after 20 seconds");
-					error =
-						"AI response timed out after 20 seconds. Please check if your AI service is running properly.";
+				if (runId === activeRunId && testing) {
+					// Invalidate this run so late non-abortable IPC completions cannot corrupt state
+					activeRunId++;
+					console.error(`AI response timed out after ${timeoutSeconds} seconds`);
+					error = `AI response timed out after ${timeoutSeconds} seconds. Please check if your AI service is running properly.`;
 					testing = false;
 					isStreaming = false; // Make sure streaming state is reset on timeout
-					debugInfo += `, Timeout after 20s`;
+					debugInfo += `, Timeout after ${timeoutSeconds}s`;
 
 					// Abort the request if possible
 					if (abortController) {
@@ -112,12 +128,9 @@
 							console.error("Error aborting request:", err);
 						}
 					}
-
-					// Force a UI update (this ensures the reactive system recognizes the state changes)
-					testing = false;
-					isStreaming = false;
+					abortController = null;
 				}
-			}, 20000);
+			}, timeoutMs);
 
 			// Start streaming mode
 			isStreaming = true;
@@ -128,10 +141,13 @@
 				useEmojiStyle: false,
 				useExtraConciseStyle: false,
 				onToken: (token) => {
+					if (runId !== activeRunId) return;
 					// Append each token as it comes in
 					streamingResult += token;
 				},
 			});
+
+			if (runId !== activeRunId) return;
 
 			// Clear the timeout since we got a result
 			if (testTimeout) {
@@ -149,6 +165,7 @@
 				throw new Error("Received empty response from AI service");
 			}
 		} catch (e) {
+			if (runId !== activeRunId) return;
 			console.error("AI credential check error:", e);
 
 			// Don't show abort errors as they're expected when we cancel the request
@@ -170,9 +187,11 @@
 			isStreaming = false;
 			testing = false;
 		} finally {
-			testing = false;
-			isStreaming = false;
-			abortController = null;
+			if (runId === activeRunId) {
+				testing = false;
+				isStreaming = false;
+				abortController = null;
+			}
 		}
 	}
 
@@ -226,6 +245,13 @@
 									Make sure LM Studio is running locally and accessible.
 
 									<Link href="https://lmstudio.ai">Learn more</Link>
+								</span>
+							{:else if modelKind === ModelKind.Copilot}
+								<span>
+									{error}
+									<br />
+									Make sure the GitHub Copilot CLI (<code>copilot</code>) is installed on your PATH
+									and signed in with <code>copilot login</code>.
 								</span>
 							{/if}
 						{:else}

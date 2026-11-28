@@ -1,5 +1,6 @@
 import { AnthropicAIClient } from "$lib/ai/anthropicClient";
 import { ButlerAIClient } from "$lib/ai/butlerClient";
+import { CopilotClient, DEFAULT_COPILOT_MODEL_NAME } from "$lib/ai/copilotClient";
 import { formatStagedChanges } from "$lib/ai/diffFormatting";
 import {
 	LM_STUDIO_DEFAULT_ENDPOINT,
@@ -32,6 +33,7 @@ import {
 import { splitMessage } from "$lib/commits/commitMessage";
 import { InjectionToken } from "@gitbutler/core/context";
 import { get } from "svelte/store";
+import type { IBackend } from "$lib/backend";
 import type { GitConfigService } from "$lib/config/gitConfigService";
 import type { SecretsService } from "$lib/secrets/secretsService";
 import type { TokenMemoryService } from "$lib/user/tokenMemoryService";
@@ -63,6 +65,7 @@ export enum GitAIConfigKey {
 	OllamaModelName = "gitbutler.aiOllamaModelName",
 	LMStudioEndpoint = "gitbutler.aiLMStudioEndpoint",
 	LMStudioModelName = "gitbutler.aiLMStudioModelName",
+	CopilotModelName = "gitbutler.aiCopilotModelName",
 	OpenRouterModelName = "gitbutler.aiOpenRouterModelName",
 }
 
@@ -132,6 +135,7 @@ export class AIService {
 		private secretsService: SecretsService,
 		private cloud: HttpClient,
 		private tokenMemoryService: TokenMemoryService,
+		private backend?: IBackend,
 	) {}
 
 	async getModelKind() {
@@ -241,6 +245,13 @@ export class AIService {
 		);
 	}
 
+	async getCopilotModelName() {
+		return await this.gitConfig.getWithDefault<string>(
+			GitAIConfigKey.CopilotModelName,
+			DEFAULT_COPILOT_MODEL_NAME,
+		);
+	}
+
 	async getOpenRouterKey() {
 		return await this.secretsService.get(AISecretHandle.OpenRouterKey);
 	}
@@ -282,6 +293,7 @@ export class AIService {
 			modelKind === ModelKind.Ollama && !!ollamaEndpoint && !!ollamaModelName;
 		const lmStudioActiveAndEndpointProvided =
 			modelKind === ModelKind.LMStudio && !!lmStudioEndpoint && !!lmStudioModelName;
+		const copilotActive = modelKind === ModelKind.Copilot;
 		const openRouterActiveAndKeyProvided =
 			modelKind === ModelKind.OpenRouter && !!(await this.getOpenRouterKey());
 
@@ -290,6 +302,7 @@ export class AIService {
 			anthropicActiveAndKeyProvided ||
 			ollamaActiveAndEndpointProvided ||
 			lmStudioActiveAndEndpointProvided ||
+			copilotActive ||
 			openRouterActiveAndKeyProvided
 		);
 	}
@@ -332,6 +345,14 @@ export class AIService {
 			}
 
 			return new LMStudioClient(lmStudioEndpoint, lmStudioModelName);
+		}
+
+		if (modelKind === ModelKind.Copilot) {
+			if (!this.backend) {
+				throw new Error("Backend is required to use GitHub Copilot");
+			}
+			const copilotModelName = await this.getCopilotModelName();
+			return new CopilotClient(this.backend, copilotModelName);
 		}
 
 		if (modelKind === ModelKind.OpenAI) {

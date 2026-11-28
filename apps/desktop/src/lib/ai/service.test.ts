@@ -1,5 +1,6 @@
 import { AnthropicAIClient } from "$lib/ai/anthropicClient";
 import { ButlerAIClient } from "$lib/ai/butlerClient";
+import { CopilotClient, DEFAULT_COPILOT_MODEL_NAME } from "$lib/ai/copilotClient";
 import { OpenAIClient } from "$lib/ai/openAIClient";
 import {
 	SHORT_DEFAULT_BRANCH_TEMPLATE,
@@ -62,8 +63,8 @@ class DummyGitConfigService extends GitConfigService {
 		return (this.config[key] || undefined) as T | undefined;
 	}
 
-	async getWithDefault<T extends string>(key: string): Promise<T> {
-		return this.config[key] as T;
+	async getWithDefault<T extends string>(key: string, defaultValue?: T): Promise<T> {
+		return (this.config[key] ?? defaultValue) as T;
 	}
 
 	async set<T extends string>(key: string, value: T): Promise<T | undefined> {
@@ -155,9 +156,11 @@ function buildDefaultServices() {
 	const tokenMemoryService = new TokenMemoryService();
 	const fetchMock = vi.fn();
 	const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+	const backend = mockCreateBackend();
 	return {
+		backend,
 		tokenMemoryService,
-		aiService: new AIService(gitConfig, secretsService, cloud, tokenMemoryService),
+		aiService: new AIService(gitConfig, secretsService, cloud, tokenMemoryService, backend),
 	};
 }
 
@@ -277,6 +280,39 @@ describe("AIService", () => {
 
 			await expect(aiService.buildClient.bind(aiService)).rejects.toThrowError(
 				new Error("When using OpenRouter, you must provide a valid API key"),
+			);
+		});
+
+		test("When ai provider is Copilot, it validates without stored secrets and invokes backend", async () => {
+			const gitConfig = new DummyGitConfigService({
+				...defaultGitConfig,
+				[GitAIConfigKey.ModelProvider]: ModelKind.Copilot,
+			});
+			const secretsService = new DummySecretsService();
+			const tokenMemoryService = new TokenMemoryService();
+			const fetchMock = vi.fn();
+			const cloud = new HttpClient(fetchMock, "https://www.example.com", tokenMemoryService.token);
+			const backend = mockCreateBackend();
+			const invokeSpy = vi.spyOn(backend, "invoke").mockResolvedValue("feat: add copilot support");
+			const aiService = new AIService(
+				gitConfig,
+				secretsService,
+				cloud,
+				tokenMemoryService,
+				backend,
+			);
+
+			expect(await aiService.validateConfiguration()).toBe(true);
+			const client = await aiService.buildClient();
+			expect(client).toBeInstanceOf(CopilotClient);
+
+			const summary = await aiService.summarizeCommit({ diffInput: exampleDiffs });
+			expect(summary).toBe("feat: add copilot support");
+			expect(invokeSpy).toHaveBeenCalledWith(
+				"ai_copilot_evaluate",
+				expect.objectContaining({
+					model: DEFAULT_COPILOT_MODEL_NAME,
+				}),
 			);
 		});
 	});

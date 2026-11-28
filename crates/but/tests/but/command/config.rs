@@ -501,6 +501,26 @@ fn ai_global_config_works_outside_repository() {
 }
 
 #[test]
+fn ai_copilot_config_sets_provider_and_model() {
+    let env = Sandbox::empty();
+    let global_config = env.projects_root().join("global.gitconfig");
+
+    env.but("config ai copilot --model gpt-4.1")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .assert()
+        .success();
+
+    assert_eq!(
+        env.invoke_git("config --file global.gitconfig --get gitbutler.aiModelProvider"),
+        "copilot"
+    );
+    assert_eq!(
+        env.invoke_git("config --file global.gitconfig --get gitbutler.aiCopilotModelName"),
+        "gpt-4.1"
+    );
+}
+
+#[test]
 fn ai_show_outputs_current_global_configuration_json() {
     let env = Sandbox::empty();
     let global_config = env.projects_root().join("global.gitconfig");
@@ -571,6 +591,7 @@ AI Configuration (global)
   Ollama model: (not set)
   LM Studio endpoint: (not set)
   LM Studio model: (not set)
+  Copilot model: (not set)
 
 "#]]);
 }

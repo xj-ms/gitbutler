@@ -43,6 +43,7 @@
 	let ollamaModel: string | undefined = $state();
 	let lmStudioEndpoint: string | undefined = $state();
 	let lmStudioModel: string | undefined = $state();
+	let copilotModel: string | undefined = $state();
 	let openRouterKey: string | undefined = $state();
 	let openRouterModel: string | undefined = $state();
 
@@ -75,6 +76,8 @@
 
 		lmStudioEndpoint = await aiService.getLMStudioEndpoint();
 		lmStudioModel = await aiService.getLMStudioModelName();
+
+		copilotModel = await aiService.getCopilotModelName();
 
 		openRouterKey = await aiService.getOpenRouterKey();
 		openRouterModel = await aiService.getOpenRouterModelName();
@@ -172,6 +175,9 @@
 		setConfiguration(GitAIConfigKey.LMStudioModelName, lmStudioModel);
 	});
 	run(() => {
+		setConfiguration(GitAIConfigKey.CopilotModelName, copilotModel);
+	});
+	run(() => {
 		setSecret(AISecretHandle.OpenRouterKey, openRouterKey);
 	});
 	run(() => {
@@ -190,8 +196,9 @@
 {/snippet}
 
 <p class="text-13 text-body ai-settings__about-text">
-	GitButler supports multiple AI providers: OpenAI and Anthropic (via API or your own key),
-	OpenRouter for access to hundreds of models, plus local models through Ollama and LM Studio.
+	GitButler supports multiple AI providers: OpenAI and Anthropic (via API or your own key), GitHub
+	Copilot (via your local CLI login), OpenRouter for access to hundreds of models, plus local models
+	through Ollama and LM Studio.
 </p>
 
 <CardGroup>
@@ -422,6 +429,31 @@
 				/>
 
 				<Textbox label="Model" bind:value={openRouterModel} placeholder="openai/gpt-4.1-mini" />
+			</CardGroup.Item>
+		{/if}
+
+		<CardGroup.Item labelFor="copilot">
+			{#snippet title()}
+				GitHub Copilot
+			{/snippet}
+			{#snippet actions()}
+				<RadioButton name="modelKind" id="copilot" value={ModelKind.Copilot} />
+			{/snippet}
+		</CardGroup.Item>
+		{#if modelKind === ModelKind.Copilot}
+			<CardGroup.Item>
+				<Textbox label="Model" bind:value={copilotModel} placeholder="default" />
+				<InfoMessage filled outlined={false}>
+					{#snippet title()}
+						Using GitHub Copilot CLI login
+					{/snippet}
+					{#snippet content()}
+						GitButler connects to your locally installed GitHub Copilot CLI (<code>copilot</code>)
+						and uses your existing CLI authentication (<code>copilot login</code> or
+						<code>gh auth login</code>). No API key is stored in GitButler. Leave the model as
+						<code>default</code> to use your CLI default model.
+					{/snippet}
+				</InfoMessage>
 			</CardGroup.Item>
 		{/if}
 

@@ -2,6 +2,7 @@ mod anthropic;
 mod chat;
 mod client;
 mod config;
+mod copilot;
 mod key;
 mod lmstudio;
 mod ollama;
@@ -26,6 +27,7 @@ pub enum LLMProviderKind {
     Anthropic,
     Ollama,
     LMStudio,
+    Copilot,
     OpenRouter,
 }
 
@@ -36,6 +38,7 @@ impl LLMProviderKind {
             "anthropic" => Some(LLMProviderKind::Anthropic),
             "ollama" => Some(LLMProviderKind::Ollama),
             "lmstudio" => Some(LLMProviderKind::LMStudio),
+            "copilot" => Some(LLMProviderKind::Copilot),
             "openrouter" => Some(LLMProviderKind::OpenRouter),
             _ => None,
         }
@@ -47,6 +50,7 @@ impl LLMProviderKind {
             LLMProviderKind::Anthropic => "anthropic",
             LLMProviderKind::Ollama => "ollama",
             LLMProviderKind::LMStudio => "lmstudio",
+            LLMProviderKind::Copilot => "copilot",
             LLMProviderKind::OpenRouter => "openrouter",
         }
     }
@@ -57,6 +61,7 @@ impl LLMProviderKind {
             LLMProviderKind::Anthropic => "Anthropic",
             LLMProviderKind::Ollama => "Ollama",
             LLMProviderKind::LMStudio => "LM Studio",
+            LLMProviderKind::Copilot => "GitHub Copilot",
             LLMProviderKind::OpenRouter => "OpenRouter",
         }
     }
@@ -74,6 +79,7 @@ pub enum LLMProviderConfig {
     Anthropic(Option<anthropic::CredentialsKind>),
     Ollama(Option<ollama::OllamaConfig>),
     LMStudio(Option<lmstudio::LMStudioConfig>),
+    Copilot(Option<String>),
     OpenRouter(Option<openrouter::OpenRouterConfig>),
 }
 
@@ -83,6 +89,7 @@ pub enum LLMClientType {
     Anthropic(Arc<anthropic::AnthropicProvider>),
     Ollama(Arc<ollama::OllamaProvider>),
     LMStudio(Arc<lmstudio::LMStudioProvider>),
+    Copilot(Arc<copilot::CopilotProvider>),
     OpenRouter(Arc<openrouter::OpenRouterProvider>),
 }
 
@@ -127,6 +134,8 @@ impl LLMProvider {
             }
             LLMProviderConfig::LMStudio(config) => lmstudio::LMStudioProvider::with(config, None)
                 .map(|p| LLMClientType::LMStudio(Arc::new(p)))?,
+            LLMProviderConfig::Copilot(model) => copilot::CopilotProvider::with(model)
+                .map(|p| LLMClientType::Copilot(Arc::new(p)))?,
             LLMProviderConfig::OpenRouter(config) => {
                 openrouter::OpenRouterProvider::with(config, None)
                     .map(|p| LLMClientType::OpenRouter(Arc::new(p)))?
@@ -215,6 +224,12 @@ impl LLMProvider {
                     client: LLMClientType::LMStudio(Arc::new(client)),
                 })
             }
+            LLMProviderKind::Copilot => {
+                let client = copilot::CopilotProvider::with(Some(configuration.copilot.model))?;
+                Some(Self {
+                    client: LLMClientType::Copilot(Arc::new(client)),
+                })
+            }
             LLMProviderKind::OpenRouter => {
                 let provider_config = config.string(AI_OPENROUTER_ENDPOINT_KEY).map(|api_base| {
                     openrouter::OpenRouterConfig {
@@ -252,6 +267,7 @@ impl LLMProvider {
             LLMClientType::Anthropic(client) => client.model(),
             LLMClientType::Ollama(client) => client.model(),
             LLMClientType::LMStudio(client) => client.model(),
+            LLMClientType::Copilot(client) => client.model(),
             LLMClientType::OpenRouter(client) => client.model(),
         }
     }
@@ -271,6 +287,7 @@ impl LLMProvider {
             LLMClientType::Anthropic(_) => DEFAULT_ANTHROPIC_MODEL,
             LLMClientType::Ollama(_) => DEFAULT_OLLAMA_MODEL,
             LLMClientType::LMStudio(_) => DEFAULT_LMSTUDIO_MODEL,
+            LLMClientType::Copilot(_) => DEFAULT_COPILOT_MODEL,
             LLMClientType::OpenRouter(_) => DEFAULT_OPENROUTER_MODEL,
         }
         .to_string()
@@ -389,6 +406,13 @@ impl LLMProvider {
                 model,
                 on_token,
             ),
+            LLMClientType::Copilot(client) => client.tool_calling_loop_stream(
+                system_message,
+                chat_messages,
+                tool_set,
+                model,
+                on_token,
+            ),
             LLMClientType::OpenRouter(client) => client.tool_calling_loop_stream(
                 system_message,
                 chat_messages,
@@ -443,6 +467,9 @@ impl LLMProvider {
             LLMClientType::LMStudio(client) => {
                 client.tool_calling_loop(system_message, chat_messages, tool_set, model)
             }
+            LLMClientType::Copilot(client) => {
+                client.tool_calling_loop(system_message, chat_messages, tool_set, model)
+            }
             LLMClientType::OpenRouter(client) => {
                 client.tool_calling_loop(system_message, chat_messages, tool_set, model)
             }
@@ -485,6 +512,9 @@ impl LLMProvider {
                 client.stream_response(system_message, chat_messages, model, on_token)
             }
             LLMClientType::LMStudio(client) => {
+                client.stream_response(system_message, chat_messages, model, on_token)
+            }
+            LLMClientType::Copilot(client) => {
                 client.stream_response(system_message, chat_messages, model, on_token)
             }
             LLMClientType::OpenRouter(client) => {
@@ -539,6 +569,9 @@ impl LLMProvider {
             LLMClientType::LMStudio(client) => {
                 client.structured_output::<T>(system_message, chat_messages, model)
             }
+            LLMClientType::Copilot(client) => {
+                client.structured_output::<T>(system_message, chat_messages, model)
+            }
             LLMClientType::OpenRouter(client) => {
                 client.structured_output::<T>(system_message, chat_messages, model)
             }
@@ -577,6 +610,7 @@ impl LLMProvider {
             LLMClientType::LMStudio(client) => {
                 client.response(system_message, chat_messages, model)
             }
+            LLMClientType::Copilot(client) => client.response(system_message, chat_messages, model),
             LLMClientType::OpenRouter(client) => {
                 client.response(system_message, chat_messages, model)
             }

@@ -430,6 +430,7 @@ fn main() -> anyhow::Result<()> {
                 resolve::tauri_resolve_commit_conflicts_ai::resolve_commit_conflicts_ai,
                 resolve::tauri_commit_conflicts::commit_conflicts,
                 resolve::tauri_resolve_commit_conflict_hunks::resolve_commit_conflict_hunks,
+                but_api::ai::tauri_ai_copilot_evaluate::ai_copilot_evaluate,
                 platform::tauri_build_type::build_type,
             ])
             .menu(menu::build)

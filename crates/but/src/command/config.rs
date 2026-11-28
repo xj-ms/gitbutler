@@ -17,8 +17,8 @@ use but_ctx::Context;
 use but_llm::{
     AI_ANTHROPIC_SECRET_HANDLE, AI_OPENAI_SECRET_HANDLE, AI_OPENROUTER_SECRET_HANDLE,
     AiConfigurationSnapshot, LLMProviderKind, apply_anthropic_configuration,
-    apply_lmstudio_configuration, apply_ollama_configuration, apply_openai_configuration,
-    apply_openrouter_configuration,
+    apply_copilot_configuration, apply_lmstudio_configuration, apply_ollama_configuration,
+    apply_openai_configuration, apply_openrouter_configuration,
 };
 use but_secret::{Sensitive, secret};
 use but_settings::{
@@ -1450,6 +1450,13 @@ fn show_ai_config(
             t.config_value
                 .paint(info.lmstudio_model.as_deref().unwrap_or("(not set)"))
         )?;
+        writeln!(
+            out,
+            "  {}: {}",
+            t.hint.paint("Copilot model"),
+            t.config_value
+                .paint(info.copilot_model.as_deref().unwrap_or("(not set)"))
+        )?;
     } else if let Some(out) = out.for_json() {
         out.write_value(serde_json::json!(info))?;
     }
@@ -1504,6 +1511,10 @@ fn ai_config_non_interactive(
             apply_lmstudio_config(repo, scope, endpoint, model)?;
             write_ai_config_success(out, scope, LLMProviderKind::LMStudio)?;
         }
+        AiSubcommand::Copilot { model } => {
+            apply_copilot_config(repo, scope, model)?;
+            write_ai_config_success(out, scope, LLMProviderKind::Copilot)?;
+        }
         AiSubcommand::Openrouter {
             model,
             api_key,
@@ -1532,6 +1543,7 @@ fn ai_config_interactive(
     let providers = nonempty::nonempty![
         ("OpenAI", LLMProviderKind::OpenAi),
         ("Anthropic", LLMProviderKind::Anthropic),
+        ("GitHub Copilot", LLMProviderKind::Copilot),
         ("Ollama", LLMProviderKind::Ollama),
         ("LM Studio", LLMProviderKind::LMStudio),
         ("OpenRouter", LLMProviderKind::OpenRouter)
@@ -1601,6 +1613,17 @@ fn ai_config_interactive(
             let endpoint = inout.prompt("LM Studio endpoint URL (optional):")?;
             let model = inout.prompt("Preferred LM Studio model (optional):")?;
             apply_lmstudio_config(repo, scope, endpoint, model)?;
+        }
+        LLMProviderKind::Copilot => {
+            writeln!(
+                inout,
+                "{}",
+                t.hint.paint(
+                    "GitHub Copilot uses your existing CLI login (`copilot login` or `gh auth login`)."
+                )
+            )?;
+            let model = inout.prompt("Preferred Copilot model (leave empty for CLI default):")?;
+            apply_copilot_config(repo, scope, model)?;
         }
         LLMProviderKind::OpenRouter => {
             let model = inout.prompt("Preferred OpenRouter model (e.g. openai/gpt-4.1-mini):")?;
@@ -1764,6 +1787,16 @@ fn apply_lmstudio_config(
 ) -> Result<()> {
     edit_ai_git_config(repo, scope, |config| {
         apply_lmstudio_configuration(config, endpoint.as_deref(), model.as_deref())
+    })
+}
+
+fn apply_copilot_config(
+    repo: Option<&gix::Repository>,
+    scope: AiScope,
+    model: Option<String>,
+) -> Result<()> {
+    edit_ai_git_config(repo, scope, |config| {
+        apply_copilot_configuration(config, model.as_deref())
     })
 }
 

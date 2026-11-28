@@ -303,6 +303,13 @@ pub enum AiSubcommand {
         model: Option<String>,
     },
 
+    /// Configure GitHub Copilot (via local Copilot CLI login) as the active AI provider.
+    Copilot {
+        /// Preferred model name (or "default" to use the Copilot CLI default).
+        #[clap(long)]
+        model: Option<String>,
+    },
+
     /// Configure OpenRouter as the active AI provider.
     Openrouter {
         /// Preferred model name (for example, openai/gpt-4.1-mini).

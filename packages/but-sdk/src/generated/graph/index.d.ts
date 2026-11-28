@@ -50,6 +50,17 @@ export type AddProjectOutcome = {
   subject: string;
 };
 
+/** A single message in an AI prompt conversation. */
+export type AiPromptMessage = {
+  /** The message sender role. */
+  role: AiPromptRole;
+  /** The message body text. */
+  content: string;
+};
+
+/** Role of a message in a prompt sent to a local AI provider. */
+export type AiPromptRole = "system" | "user" | "assistant";
+
 /** JSON transport type for the outcome of an AI conflict resolution. */
 export type AiResolutionResult = {
   /** The conflicted commit that was resolved. */

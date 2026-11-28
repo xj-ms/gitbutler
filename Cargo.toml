@@ -296,6 +296,8 @@ async-openai = { version = "0.38.2", default-features = false, features = [
     "rustls",
     "chat-completion",
 ] }
+copilot-sdk = { version = "2.0.3", default-features = false, features = ["derive"] }
+which = "8.0.2"
 open = "5.3.4"
 regex = { version = "1.11.3", default-features = false, features = [
     "std",

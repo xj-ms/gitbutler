@@ -10,9 +10,10 @@ use crate::backend::settings::{self as backend, AiConfiguration, AiConfiguration
 use crate::theme::Theme;
 use crate::ui::text_input::{InputEvent, TextInput};
 
-const PROVIDERS: [(&str, &str); 4] = [
+const PROVIDERS: [(&str, &str); 5] = [
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
+    ("copilot", "GitHub Copilot"),
     ("ollama", "Ollama"),
     ("lmstudio", "LM Studio"),
 ];
@@ -84,6 +85,7 @@ fn update_from(config: &AiConfiguration) -> AiConfigurationUpdate {
         ollama_model: config.ollama_model.clone(),
         lmstudio_endpoint: config.lmstudio_endpoint.clone(),
         lmstudio_model: config.lmstudio_model.clone(),
+        copilot_model: config.copilot_model.clone(),
     }
 }
 
@@ -96,6 +98,7 @@ fn provider_parts(config: &AiConfiguration) -> (&str, Option<&str>, Option<(&str
             None,
             Some((&config.anthropic_key_option, config.anthropic_has_api_key)),
         ),
+        "copilot" => (&config.copilot_model, None, None),
         "ollama" => (&config.ollama_model, Some(&config.ollama_endpoint), None),
         "lmstudio" => (
             &config.lmstudio_model,
@@ -236,6 +239,7 @@ impl SettingsView {
                 saved,
                 move |update| match provider.as_str() {
                     "anthropic" => update.anthropic_model = text,
+                    "copilot" => update.copilot_model = text,
                     "ollama" => update.ollama_model = text,
                     "lmstudio" => update.lmstudio_model = text,
                     _ => update.openai_model = text,
@@ -293,6 +297,8 @@ impl SettingsView {
                 "{provider_name} was set up in another GitButler app, which is where it changes. \
                  Pick a provider here to use that instead."
             )
+        } else if config.provider == "copilot" {
+            "Uses your existing GitHub Copilot CLI login (`copilot login`) to write commit messages, pull request descriptions, and conflict merges.".into()
         } else if config.is_configured {
             "Writes commit messages and pull request descriptions, and suggests conflict merges, when you ask.".into()
         } else {
@@ -348,9 +354,14 @@ impl SettingsView {
                 ai_field(&self.ai.endpoint, endpoint),
             ));
         }
+        let model_description = if config.provider == "copilot" {
+            "The GitHub Copilot model to ask, or `default` for the CLI default.".to_owned()
+        } else {
+            format!("The {provider_name} model to ask.")
+        };
         rows.push(Row::new(
             "Model",
-            format!("The {provider_name} model to ask."),
+            model_description,
             ai_field(&self.ai.model, model),
         ));
         rows

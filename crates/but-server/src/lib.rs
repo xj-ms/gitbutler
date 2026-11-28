@@ -544,6 +544,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             "/secret_delete_global",
             but_post(legacy::secret::secret_delete_global_cmd),
         )
+        .route(
+            "/ai_copilot_evaluate",
+            but_post_async(but_api::ai::ai_copilot_evaluate_cmd),
+        )
         // User management
         .route("/get_user", but_post(legacy::users::get_user_cmd))
         .route("/set_user", but_post(legacy::users::set_user_cmd))
